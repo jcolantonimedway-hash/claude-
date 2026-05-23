@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-800 antialiased;
+  }
+}
+
+@layer components {
+  .stage-node {
+    @apply relative flex flex-col items-center;
+  }
+
+  .stage-circle {
+    @apply w-14 h-14 rounded-full flex items-center justify-center text-2xl font-bold border-4 transition-all duration-500 z-10 relative;
+  }
+
+  .stage-connector {
+    @apply absolute top-7 h-1 transition-all duration-700;
+  }
+
+  .btn-primary {
+    @apply bg-ri-navy text-white px-6 py-2.5 rounded-lg font-semibold hover:bg-blue-900 transition-colors shadow-md;
+  }
+
+  .card {
+    @apply bg-white rounded-2xl shadow-md border border-slate-100;
+  }
+}
+
+@keyframes glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(0, 40, 104, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 12px rgba(0, 40, 104, 0);
+  }
+}
+
+.glow-animate {
+  animation: glow-pulse 2s ease-in-out infinite;
+}
+
+@keyframes glow-amber {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(217, 119, 6, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 12px rgba(217, 119, 6, 0);
+  }
+}
+
+.glow-amber {
+  animation: glow-amber 2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.progress-line-fill {
+  transition: width 1s ease-in-out;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 3px;
+}
