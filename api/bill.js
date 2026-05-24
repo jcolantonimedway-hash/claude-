@@ -127,9 +127,11 @@ function extractFormFields(html) {
 }
 
 async function fetchStatusViaPost(identifier, ms = 12000) {
-  // Step 1: GET the real homepage (BillDetail.aspx was a 404)
+  // Step 1: GET the real homepage to obtain ViewState + session cookies
   let formHtml = '';
   let formAction = STATUS_HOME;
+  let sessionCookies = '';
+
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ms);
@@ -140,11 +142,27 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
     clearTimeout(timer);
     if (!getRes.ok) return null;
     formHtml = await getRes.text();
-    // Extract actual form action URL if present
+
+    // Capture session cookies so ASP.NET accepts our POST
+    const setCookie = getRes.headers.get('set-cookie');
+    if (setCookie) {
+      sessionCookies = setCookie.split(',')
+        .map(c => c.split(';')[0].trim())
+        .filter(Boolean)
+        .join('; ');
+    }
+
+    // Extract form action — handle './', '/', and absolute URLs
     const actionMatch = formHtml.match(/<form[^>]+action="([^"]+)"/i);
     if (actionMatch) {
       const a = actionMatch[1];
-      formAction = a.startsWith('http') ? a : STATUS_HOME + a.replace(/^\//, '');
+      if (a.startsWith('http')) {
+        formAction = a;
+      } else if (a === './' || a === '.' || a === '') {
+        formAction = STATUS_HOME;           // same page
+      } else {
+        formAction = 'http://status.rilegislature.gov/' + a.replace(/^\//, '');
+      }
     }
   } catch {
     return null;
@@ -152,35 +170,32 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
 
   const { fields, selects, submits, textInputs } = extractFormFields(formHtml);
 
-  // Bill number field: first visible text input
+  // Bill-number field: first visible text input
   const billInput = textInputs[0];
-  const billFieldName = billInput?.name || '';
+  const billFieldName = billInput?.name || 'ctl00$rilinContent$txtReport';
 
-  // Year field
-  let yearFieldName = '';
+  // Year dropdown
+  let yearFieldName  = 'ctl00$rilinContent$cbYear';
   let yearFieldValue = YEAR;
   for (const sel of selects) {
     const yearOpt = sel.options.find(o => o.value.includes(YEAR) || o.text.includes(YEAR));
-    if (yearOpt) {
-      yearFieldName  = sel.name;
-      yearFieldValue = yearOpt.value || YEAR;
-      break;
-    }
+    if (yearOpt) { yearFieldName = sel.name; yearFieldValue = yearOpt.value || YEAR; break; }
   }
 
-  // Submit
-  const submitBtn = submits[0];
-  const submitName  = submitBtn?.name  || '';
-  const submitValue = submitBtn?.value || 'Search';
+  // Submit button — confirmed value on RI site is "Enter"
+  const submitBtn   = submits[0];
+  const submitName  = submitBtn?.name  || 'ctl00$rilinContent$cmdReport';
+  const submitValue = submitBtn?.value || 'Enter';   // ← was 'Search'/'View' before
 
   // Build POST body
-  const body = new URLSearchParams(fields);
-  // Use discovered field names; fall back to confirmed RI status site names
-  body.set(billFieldName || 'ctl00$rilinContent$txtReport',  identifier);
-  body.set(yearFieldName  || 'ctl00$rilinContent$cbYear',    yearFieldValue || YEAR);
-  body.set(submitName     || 'ctl00$rilinContent$cmdReport', submitValue || 'View');
+  const body = new URLSearchParams(fields);   // includes __VIEWSTATE, __EVENTVALIDATION, etc.
+  body.set(billFieldName, identifier);
+  // The form has a From/To bill range — set both to the same bill for a single-bill search
+  body.set('ctl00$rilinContent$txtBillTo', identifier);
+  body.set(yearFieldName, yearFieldValue);
+  body.set(submitName, submitValue);
 
-  // Step 2: POST to the form action
+  // Step 2: POST with session cookies
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ms);
@@ -192,22 +207,30 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Referer': STATUS_HOME,
         'Origin': 'http://status.rilegislature.gov',
+        ...(sessionCookies ? { Cookie: sessionCookies } : {}),
       },
       body: body.toString(),
     });
     clearTimeout(timer);
     if (!postRes.ok) return null;
     const postHtml = await postRes.text();
+
+    // For debug: sample the MIDDLE of the response (where the results table lives)
+    const midA = Math.floor(postHtml.length * 0.35);
+    const midB = Math.floor(postHtml.length * 0.65);
+
     return {
       html: postHtml,
       meta: {
-        formAction, billFieldName, yearFieldName, submitName,
+        formAction, billFieldName, yearFieldName,
+        submitName, submitValue,        // ← now includes submitValue
+        cookies: sessionCookies.slice(0, 120),
         textInputCount: textInputs.length, selectCount: selects.length,
         viewStateLen: (fields.__VIEWSTATE || '').length,
-        formHtmlBeginContent: formHtml.slice(
-          Math.max(0, formHtml.indexOf('BEGIN PAGE CONTENT')),
-          formHtml.indexOf('BEGIN PAGE CONTENT') + 2000
-        ),
+        postLength: postHtml.length,
+        pageContentIdx: postHtml.indexOf('BEGIN PAGE CONTENT'),
+        // Middle slice shows where the results table should be
+        postMidSnippet: postHtml.slice(midA, midB),
       },
     };
   } catch {
@@ -465,17 +488,16 @@ export default async function handler(req, res) {
   try {
     const postResult = await fetchStatusViaPost(identifier);
     if (postResult) {
-      const { html: postHtml, formFieldNames } = postResult;
-      // Find "BEGIN PAGE CONTENT" in POST response — that's where the bill table lives
-      const pageContentIdx = postHtml.indexOf('BEGIN PAGE CONTENT');
-      const tableIdx       = postHtml.indexOf('<table', pageContentIdx > 0 ? pageContentIdx : 0);
+      const { html: postHtml, meta } = postResult;
       statusLog.push({
         method: 'POST', url: STATUS_HOME, length: postHtml.length,
-        meta: postResult.meta,
-        pageContentIdx,
-        postContentSnippet: pageContentIdx >= 0
-          ? postHtml.slice(pageContentIdx, pageContentIdx + 3000)
-          : postHtml.slice(postHtml.length - 4000), // fallback: end of doc
+        meta,
+        // Middle-of-response slice: this is where the results table should appear
+        postMidSnippet: meta.postMidSnippet,
+        // Beginning of content if marker found
+        postContentSnippet: meta.pageContentIdx >= 0
+          ? postHtml.slice(meta.pageContentIdx, meta.pageContentIdx + 3000)
+          : postHtml.slice(0, 2000),  // first 2 kB (HTML head/structure)
       });
       actions = parseStatusPage(postHtml);
     } else {
