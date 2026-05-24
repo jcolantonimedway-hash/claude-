@@ -81,7 +81,7 @@ function getStatusUrls(id) {
 // The RI status site uses ViewState — we GET the form first, then POST.
 // ──────────────────────────────────────────────────────────────────
 
-const STATUS_HOME = 'http://status.rilegislature.gov/';
+const STATUS_HOME = 'https://status.rilegislature.gov/';
 
 // Extract ALL form fields with their default values so the POST body
 // matches what a real browser would submit.
@@ -174,7 +174,7 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
       } else if (a === './' || a === '.' || a === '') {
         formAction = STATUS_HOME;           // same page
       } else {
-        formAction = 'http://status.rilegislature.gov/' + a.replace(/^\//, '');
+        formAction = 'https://status.rilegislature.gov/' + a.replace(/^\//, '');
       }
     }
   } catch {
@@ -224,6 +224,7 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Referer': STATUS_HOME,
         'Origin': 'https://status.rilegislature.gov',
+        'Accept-Encoding': 'identity',   // avoid gzip so text() decodes cleanly
         ...(sessionCookies ? { Cookie: sessionCookies } : {}),
       },
       body: body.toString(),
