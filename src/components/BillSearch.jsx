@@ -17,8 +17,9 @@ export default function BillSearch({ onSearch, loading, error }) {
         <h2 className="text-lg font-bold text-slate-800">Search a RI Bill</h2>
         <p className="text-sm text-slate-500 mt-0.5">
           Enter a bill number from the RI General Assembly — e.g.{' '}
-          <code className="bg-slate-100 px-1 rounded text-xs font-mono">H5001</code> or{' '}
-          <code className="bg-slate-100 px-1 rounded text-xs font-mono">S0245</code>
+          <code className="bg-slate-100 px-1 rounded text-xs font-mono">H7632</code> or{' '}
+          <code className="bg-slate-100 px-1 rounded text-xs font-mono">S2977</code>{' '}
+          <span className="text-slate-400">(2026 session)</span>
         </p>
       </div>
 
@@ -29,7 +30,7 @@ export default function BillSearch({ onSearch, loading, error }) {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value.toUpperCase())}
-            placeholder="e.g. H5001"
+            placeholder="e.g. H7632"
             disabled={loading}
             className="w-full pl-9 pr-4 py-2.5 border border-slate-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ri-navy/30 focus:border-ri-navy disabled:opacity-60"
           />
