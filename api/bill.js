@@ -131,6 +131,7 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
   let formHtml = '';
   let formAction = STATUS_HOME;
   let sessionCookies = '';
+  let getLength = 0;
 
   try {
     const controller = new AbortController();
@@ -142,6 +143,7 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
     clearTimeout(timer);
     if (!getRes.ok) return null;
     formHtml = await getRes.text();
+    getLength = formHtml.length;
 
     // Capture session cookies so ASP.NET accepts our POST
     const setCookie = getRes.headers.get('set-cookie');
@@ -188,10 +190,14 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
   const submitValue = submitBtn?.value || 'Enter';   // ← was 'Search'/'View' before
 
   // Build POST body
+  const numOnly = identifier.slice(1); // "7149" from "H7149" — RI status form uses number only
   const body = new URLSearchParams(fields);   // includes __VIEWSTATE, __EVENTVALIDATION, etc.
-  body.set(billFieldName, identifier);
-  // The form has a From/To bill range — set both to the same bill for a single-bill search
-  body.set('ctl00$rilinContent$txtBillTo', identifier);
+  // Standard ASP.NET WebForms fields
+  body.set('__EVENTTARGET', '');
+  body.set('__EVENTARGUMENT', '');
+  body.set('__LASTFOCUS', '');
+  body.set(billFieldName, numOnly);                    // ← numeric only, not "H7149"
+  body.set('ctl00$rilinContent$txtBillTo', numOnly);   // ← same for range end
   body.set(yearFieldName, yearFieldValue);
   body.set(submitName, submitValue);
 
@@ -214,22 +220,26 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
     clearTimeout(timer);
     if (!postRes.ok) return null;
     const postHtml = await postRes.text();
+    const finalUrl = postRes.url;
 
-    // For debug: sample the MIDDLE of the response (where the results table lives)
+    // For debug: first 2 kB (structure), middle (results table), comparison sizes
     const midA = Math.floor(postHtml.length * 0.35);
     const midB = Math.floor(postHtml.length * 0.65);
 
     return {
       html: postHtml,
       meta: {
-        formAction, billFieldName, yearFieldName,
-        submitName, submitValue,        // ← now includes submitValue
+        formAction, finalUrl,
+        billFieldName, yearFieldName,
+        submitName, submitValue,
+        numOnly,  // ← confirm we're sending numeric-only bill number
         cookies: sessionCookies.slice(0, 120),
         textInputCount: textInputs.length, selectCount: selects.length,
         viewStateLen: (fields.__VIEWSTATE || '').length,
+        getLength,           // GET page size (if == postLength, POST returned the form again)
         postLength: postHtml.length,
         pageContentIdx: postHtml.indexOf('BEGIN PAGE CONTENT'),
-        // Middle slice shows where the results table should be
+        postStart: postHtml.slice(0, 1500),  // beginning — tells us if it's results vs form
         postMidSnippet: postHtml.slice(midA, midB),
       },
     };
