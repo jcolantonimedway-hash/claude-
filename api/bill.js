@@ -81,7 +81,7 @@ function getStatusUrls(id) {
 // The RI status site uses ViewState — we GET the form first, then POST.
 // ──────────────────────────────────────────────────────────────────
 
-const STATUS_HOME = 'https://status.rilegislature.gov/';
+const STATUS_HOME = 'http://status.rilegislature.gov/';
 
 // Extract ALL form fields with their default values so the POST body
 // matches what a real browser would submit.
@@ -237,21 +237,30 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
     const midA = Math.floor(postHtml.length * 0.35);
     const midB = Math.floor(postHtml.length * 0.65);
 
+    // Search for any dates in the POST response — if 0, it returned the blank form
+    const datesInPost = [...postHtml.matchAll(/\d{1,2}\/\d{1,2}\/202\d/g)].map(m => m[0]);
+
     return {
       html: postHtml,
       meta: {
         formAction, finalUrl,
         billFieldName, yearFieldName,
         submitName, submitValue,
-        numOnly,  // ← confirm we're sending numeric-only bill number
+        numOnly,
         cookies: sessionCookies.slice(0, 120),
+        hiddenFieldNames: Object.keys(fields).filter(k => k.startsWith('__')),
+        allFieldNames: Object.keys(fields),
         textInputCount: textInputs.length, selectCount: selects.length,
         viewStateLen: (fields.__VIEWSTATE || '').length,
-        getLength,           // GET page size (if == postLength, POST returned the form again)
+        getLength,
         postLength: postHtml.length,
-        pageContentIdx: postHtml.indexOf('BEGIN PAGE CONTENT'),
-        postStart: postHtml.slice(0, 1500),  // beginning — tells us if it's results vs form
-        postMidSnippet: postHtml.slice(midA, midB),
+        // Definitive indicator: dates found in POST response
+        datesInPost: datesInPost.slice(0, 20),
+        datesInPostCount: datesInPost.length,
+        // First 2 kB of POST response — shows if it's results or blank form
+        postStart: postHtml.slice(0, 2000),
+        // First 2 kB of GET (form) — shows what we got to extract fields from
+        formStart: formHtml.slice(0, 2000),
       },
     };
   } catch {
