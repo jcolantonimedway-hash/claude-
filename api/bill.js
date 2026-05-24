@@ -2,7 +2,7 @@
 // Handles 2026 (webserver.rilegislature.gov) and prior sessions.
 // No API key needed from the user.
 
-import * as cheerio from 'cheerio';
+import { load as cheerioLoad } from 'cheerio';
 
 const HEADERS = {
   'User-Agent':
@@ -226,7 +226,7 @@ function parseBillText(html, identifier, fullYear, chamber) {
 // ────────────────────────────────────────────────────────────────
 // Parse bill history/status HTML — look for table rows with date + action
 function parseStatusHtml(html) {
-  const $ = cheerio.load(html);
+  const $ = cheerioLoad(html);
   const actions = [];
 
   $('tr').each((_, row) => {
