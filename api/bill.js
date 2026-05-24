@@ -1,139 +1,126 @@
-// Vercel serverless function — scrapes RI General Assembly directly.
-// Handles 2026 (webserver.rilegislature.gov) and prior sessions.
+// Vercel serverless function (CommonJS) — scrapes RI General Assembly.
+// Handles 2026 session (webserver.rilegislature.gov) + prior years.
 // No API key needed from the user.
 
-import { load as cheerioLoad } from 'cheerio';
+const cheerio = require('cheerio');
 
 const HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
-  'Accept-Encoding': 'gzip, deflate, br',
   'Cache-Control': 'no-cache',
-  Pragma: 'no-cache',
   'Upgrade-Insecure-Requests': '1',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
 };
 
-function sessionYearsToTry() {
+function sessionYears() {
   const y = new Date().getFullYear();
   return [y, y - 1]; // e.g. [2026, 2025]
 }
 
-// URL patterns for each year's bill text + status pages
-function urlsForBill(identifier, fullYear) {
-  const yr = String(fullYear).slice(2);          // "26"
-  const ch = identifier[0];                       // "H" or "S"
-  const chamberDir = ch === 'H' ? 'HouseText' : 'SenateText';
-
-  return {
+function urlsFor(id, fullYear) {
+  const yr = String(fullYear).slice(2);
+  const ch = id[0];
+  const dir = ch === 'H' ? 'HouseText' : 'SenateText';
+  return [
     // 2026+ new domain
-    textNew: `https://webserver.rilegislature.gov/BillText${yr}/${chamberDir}${yr}/${identifier}.htm`,
-    textNewAlt: `https://webserver.rilegislature.gov/BillText/BillText${yr}/${chamberDir}${yr}/${identifier}.htm`,
-    // status / history (new domain — try several parameter combos)
-    statusNew1: `https://status.rilegislature.gov/bill_history_report.aspx?bills=${identifier}&year=${fullYear}`,
-    statusNew2: `https://status.rilegislature.gov/bill_history.aspx?bill=${identifier}&year=${fullYear}`,
-    // 2025 and older — old domain
-    textOld: `https://webserver.rilin.state.ri.us/BillText/BillText${yr}/${ch}/${identifier}.htm`,
-    statusOld: `https://webserver.rilin.state.ri.us/BillStatus${yr}/BillStatus${yr}.asp?bill=${identifier}`,
-  };
+    `https://webserver.rilegislature.gov/BillText${yr}/${dir}${yr}/${id}.htm`,
+    `https://webserver.rilegislature.gov/BillText/BillText${yr}/${dir}${yr}/${id}.htm`,
+    // old domain (2025 and earlier)
+    `https://webserver.rilin.state.ri.us/BillText/BillText${yr}/${ch}/${id}.htm`,
+  ];
 }
 
-// ────────────────────────────────────────────────────────────────
-export default async function handler(req, res) {
+function statusUrlsFor(id, fullYear) {
+  const yr = String(fullYear).slice(2);
+  return [
+    `https://status.rilegislature.gov/bill_history_report.aspx?bills=${id}&year=${fullYear}`,
+    `https://status.rilegislature.gov/bill_history.aspx?bill=${id}&year=${fullYear}`,
+    `https://webserver.rilin.state.ri.us/BillStatus${yr}/BillStatus${yr}.asp?bill=${id}`,
+  ];
+}
+
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Content-Type', 'application/json');
+
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const identifier = (req.query.identifier || '').toUpperCase().replace(/\s/g, '');
+  const id = ((req.query && req.query.identifier) || '').toUpperCase().replace(/\s/g, '');
 
-  if (!identifier || !/^[HS]\d+$/.test(identifier)) {
-    return res.status(400).json({
-      error: 'Enter a bill number like H7632 or S2977.',
-    });
+  if (!id || !/^[HS]\d+$/.test(id)) {
+    return res.status(400).json({ error: 'Enter a bill number like H7149 or S2977.' });
   }
 
-  for (const fullYear of sessionYearsToTry()) {
+  for (const fullYear of sessionYears()) {
     try {
-      const bill = await fetchOneBill(identifier, fullYear);
+      const bill = await fetchBill(id, fullYear);
       if (bill) return res.status(200).json(bill);
-    } catch {
+    } catch (e) {
       // try next year
     }
   }
 
   return res.status(404).json({
-    error: `"${identifier}" not found on the RI General Assembly website. Double-check the bill number — 2026 House bills start around H7000 and Senate bills around S2000.`,
+    error: `"${id}" not found on the RI General Assembly website. Check the bill number — 2026 House bills are in the H7000–H8000 range, Senate bills S2000–S3000.`,
   });
-}
+};
 
-// ────────────────────────────────────────────────────────────────
-async function fetchOneBill(identifier, fullYear) {
-  const urls = urlsForBill(identifier, fullYear);
-  const ch = identifier[0];
+async function fetchBill(id, fullYear) {
+  const ch = id[0];
   const chamber = ch === 'H' ? 'House' : 'Senate';
 
-  // 1. Fetch bill text page (for title, sponsor, committee)
+  // 1. Fetch bill text page
   let textHtml = '';
-  for (const key of ['textNew', 'textNewAlt', 'textOld']) {
+  for (const url of urlsFor(id, fullYear)) {
     try {
-      const r = await fetch(urls[key], { headers: HEADERS });
+      const r = await fetch(url, { headers: HEADERS });
       if (r.ok) { textHtml = await r.text(); break; }
     } catch {}
   }
-  if (!textHtml) return null;                    // bill doesn't exist this year
+  if (!textHtml || textHtml.trim().length < 100) return null;
 
-  const parsed = parseBillText(textHtml, identifier, fullYear, chamber);
+  const parsed = parseBillText(textHtml, id, fullYear, chamber);
   if (!parsed) return null;
 
-  // 2. Fetch action history (status page)
+  // 2. Try to get action history from status site
   let actions = parsed.actions;
-  for (const key of ['statusNew1', 'statusNew2', 'statusOld']) {
+  for (const url of statusUrlsFor(id, fullYear)) {
     try {
-      const r = await fetch(urls[key], {
+      const r = await fetch(url, {
         headers: { ...HEADERS, Referer: 'https://www.rilegislature.gov/' },
       });
       if (r.ok) {
         const html = await r.text();
-        const parsed = parseStatusHtml(html);
-        if (parsed.length > 0) { actions = parsed; break; }
+        const a = parseStatusActions(html);
+        if (a.length > 0) { actions = a; break; }
       }
     } catch {}
   }
 
-  const latest = actions[actions.length - 1];
   const yr = String(fullYear).slice(2);
-  const chamberDir = ch === 'H' ? 'HouseText' : 'SenateText';
+  const dir = ch === 'H' ? 'HouseText' : 'SenateText';
+  const latest = actions[actions.length - 1];
 
   return {
     ...parsed,
     actions,
-    latestActionDate: latest?.date || parsed.latestActionDate,
-    latestActionDescription: latest?.description || parsed.latestActionDescription,
-    riLegUrl: urls.textNew,
-    openStatesUrl: `https://openstates.org/ri/bills/${fullYear}/${identifier}/`,
+    latestActionDate: latest ? latest.date : parsed.latestActionDate,
+    latestActionDescription: latest ? latest.description : parsed.latestActionDescription,
+    riLegUrl: `https://webserver.rilegislature.gov/BillText${yr}/${dir}${yr}/${id}.htm`,
+    openStatesUrl: `https://openstates.org/ri/bills/${fullYear}/${id}/`,
   };
 }
 
-// ────────────────────────────────────────────────────────────────
-// Parse RI bill text page.
-// RI stores bill text as plain text inside <pre> tags, formatted like:
-//
-//   2026 -- H 7632
-//   ...
+// ── Parse RI bill text page ──────────────────────────────────────
+// RI stores bills as plain text inside <pre> tags:
+//   2026 -- H 7149
 //   A N A C T
-//   RELATING TO COMMERCIAL LAW -- GENERAL REGULATORY PROVISIONS
-//   (AGE-APPROPRIATE DESIGN CODE ACT)
-//
-//   Introduced By: Representatives Alzate, Shallcross Smith, ...
-//   Date Introduced: February 11, 2026
-//   Referred To: House Innovation, Internet, & Technology
-//
-function parseBillText(html, identifier, fullYear, chamber) {
-  // Extract plain text from <pre> (preferred) or strip all tags
+//   RELATING TO TOWNS AND CITIES...
+//   Introduced By: Representatives...
+//   Date Introduced: January 16, 2026
+//   Referred To: House Municipal Government
+function parseBillText(html, id, fullYear, chamber) {
   const preMatch = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
   const raw = preMatch
     ? preMatch[1].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ')
@@ -141,74 +128,61 @@ function parseBillText(html, identifier, fullYear, chamber) {
 
   if (!raw || raw.trim().length < 50) return null;
 
-  // ── Title ──────────────────────────────────────────────────
-  // Look for "RELATING TO" lines (may span multiple lines)
+  // Title
   let title = '';
   const relMatch = raw.match(/RELATING TO\s+([\s\S]{5,300}?)(?=\n\s*\n|\nIntroduced|\nDate|\nReferred)/i);
   if (relMatch) {
-    title = 'An Act Relating to ' + relMatch[1].replace(/\s+/g, ' ').trim()
-              .replace(/\([^)]+\)/, '')   // strip parenthetical subtitle
-              .replace(/--\s*/g, '— ')
-              .trim();
+    title = 'An Act Relating to ' + relMatch[1].replace(/\s+/g, ' ').replace(/\([^)]*\)/g, '').replace(/--\s*/g, '— ').trim();
   }
-  // Fallback: grab the HTML <title> tag
   if (!title) {
     const ht = html.match(/<title[^>]*>([^<]+)<\/title>/i);
     if (ht) title = ht[1].trim();
   }
-  if (!title) title = `Rhode Island Bill ${identifier} — ${fullYear} Session`;
+  if (!title) title = `Rhode Island Bill ${id} — ${fullYear} Session`;
 
-  // ── Sponsor ────────────────────────────────────────────────
+  // Sponsor
   let primarySponsor = '';
   let cosponsors = [];
-  const sponsorMatch = raw.match(/Introduced By:\s*([^\n]{5,200})/i) ||
-                       raw.match(/By:\s*((?:Representative|Senator)[^\n]{5,200})/i);
-  if (sponsorMatch) {
-    // Remove leading "Representatives" / "Senators" label
-    const allStr = sponsorMatch[1]
+  const sponsorLine = raw.match(/Introduced By:\s*([^\n]{5,300})/i) ||
+                      raw.match(/By:\s*((?:Representative|Senator)[^\n]{5,300})/i);
+  if (sponsorLine) {
+    const allStr = sponsorLine[1]
       .replace(/^Representatives?\s*/i, '')
       .replace(/^Senators?\s*/i, '')
       .trim();
     const parts = allStr.split(/,\s*/);
-    primarySponsor = (chamber === 'House' ? 'Rep. ' : 'Sen. ') + parts[0].trim();
-    cosponsors = parts.slice(1)
-      .map(s => (chamber === 'House' ? 'Rep. ' : 'Sen. ') + s.trim())
-      .filter(Boolean);
+    const prefix = chamber === 'House' ? 'Rep. ' : 'Sen. ';
+    primarySponsor = prefix + parts[0].trim();
+    cosponsors = parts.slice(1).filter(Boolean).map(s => prefix + s.trim());
   }
 
-  // ── Date Introduced ────────────────────────────────────────
-  let introDateStr = '';
+  // Date Introduced
   let introDate = '';
   const dateMatch = raw.match(/Date Introduced:\s*([A-Za-z]+ \d{1,2},?\s*\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/i);
   if (dateMatch) {
-    introDateStr = dateMatch[1].trim();
-    try {
-      introDate = new Date(introDateStr).toISOString().split('T')[0];
-    } catch {}
+    try { introDate = new Date(dateMatch[1]).toISOString().split('T')[0]; } catch {}
   }
 
-  // ── Committee ─────────────────────────────────────────────
+  // Committee
   let committee = '';
-  const committeeMatch = raw.match(/Referred To:\s*([^\n]{5,100})/i) ||
-                         raw.match(/referred to\s+(?:the\s+)?([^\n]{5,80})/i);
-  if (committeeMatch) committee = committeeMatch[1].trim().replace(/\s+/g, ' ');
+  const cmteMatch = raw.match(/Referred To:\s*([^\n]{5,120})/i) ||
+                    raw.match(/referred to\s+(?:the\s+)?([^\n]{5,80})/i);
+  if (cmteMatch) committee = cmteMatch[1].trim().replace(/\s+/g, ' ');
 
-  // ── Seed actions from what we know ────────────────────────
+  // Seed actions
   const actions = [];
   if (introDate) {
     actions.push({
       date: introDate,
-      description: committee
-        ? `Introduced, referred to ${committee}`
-        : 'Introduced',
+      description: committee ? `Introduced, referred to ${committee}` : 'Introduced',
       classification: ['introduction', ...(committee ? ['referral-committee'] : [])],
       organization: chamber,
     });
   }
 
   return {
-    id: `ri-${String(fullYear).slice(2)}-${identifier}`,
-    identifier,
+    id: `ri-${String(fullYear).slice(2)}-${id}`,
+    identifier: id,
     title: title.replace(/\s+/g, ' ').trim(),
     abstract: title.replace(/\s+/g, ' ').trim(),
     primarySponsor: primarySponsor || 'See RI General Assembly',
@@ -223,31 +197,23 @@ function parseBillText(html, identifier, fullYear, chamber) {
   };
 }
 
-// ────────────────────────────────────────────────────────────────
-// Parse bill history/status HTML — look for table rows with date + action
-function parseStatusHtml(html) {
-  const $ = cheerioLoad(html);
+// ── Parse bill status/history page ──────────────────────────────
+function parseStatusActions(html) {
+  const $ = cheerio.load(html);
   const actions = [];
 
-  $('tr').each((_, row) => {
-    const cells = $(row).find('td');
+  $('tr').each(function() {
+    const cells = $(this).find('td');
     if (cells.length < 2) return;
-
     const col0 = $(cells[0]).text().trim();
     const col1 = $(cells[1]).text().trim();
-
-    if (
-      /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(col0) ||
-      /^\d{4}-\d{2}-\d{2}$/.test(col0)
-    ) {
-      if (col1.length > 3) {
-        actions.push({
-          date: normalizeDate(col0),
-          description: col1.replace(/\s+/g, ' '),
-          classification: guessClassification(col1),
-          organization: guessOrg(col1),
-        });
-      }
+    if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(col0) && col1.length > 3) {
+      actions.push({
+        date: normalizeDate(col0),
+        description: col1.replace(/\s+/g, ' '),
+        classification: guessClassification(col1),
+        organization: guessOrg(col1),
+      });
     }
   });
 
@@ -257,7 +223,7 @@ function parseStatusHtml(html) {
 function normalizeDate(d) {
   const p = d.split('/');
   if (p.length === 3) {
-    let y = p[2].length === 2 ? '20' + p[2] : p[2];
+    const y = p[2].length === 2 ? '20' + p[2] : p[2];
     return `${y}-${p[0].padStart(2, '0')}-${p[1].padStart(2, '0')}`;
   }
   return d;
