@@ -2,138 +2,263 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ─── Base ──────────────────────────────────────────────────────────────────── */
+/* ─── Base Reset ─────────────────────────────────────────────────────────────── */
 @layer base {
-  :root {
-    --color-parchment: #F4ECD8;
-    --color-navy: #1B2A4A;
-    --color-gold: #C4A43A;
-  }
-
-  html, body {
-    background-color: #1B2A4A;
-    color: #F9F1DC;
+  html, body, #root {
+    width: 100%;
     height: 100%;
     overflow: hidden;
+    background: #070B14;
+    color: #F4ECD8;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  #root {
-    height: 100%;
+  * { box-sizing: border-box; }
+
+  /* iOS Safari viewport fix */
+  :root {
+    --app-height: 100%;
+  }
+}
+
+/* ─── Glass Morphism ─────────────────────────────────────────────────────────── */
+@layer components {
+  .glass {
+    background: linear-gradient(135deg, rgba(13,21,32,0.88) 0%, rgba(7,11,20,0.93) 100%);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(196, 164, 58, 0.12);
   }
 
-  * {
-    box-sizing: border-box;
+  .glass-light {
+    background: rgba(13, 21, 32, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(196, 164, 58, 0.1);
+  }
+
+  .gold-border {
+    border: 1px solid rgba(196, 164, 58, 0.2);
+  }
+
+  .gold-glow {
+    box-shadow: 0 0 24px rgba(196, 164, 58, 0.2);
+  }
+
+  .text-gradient-gold {
+    background: linear-gradient(135deg, #E8C96B 0%, #C4A43A 50%, #E8C96B 100%);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(196, 164, 58, 0.2) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar { width: 3px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgba(196, 164, 58, 0.2);
+    border-radius: 2px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: rgba(196, 164, 58, 0.4);
   }
 }
 
-/* ─── Custom Scrollbar ──────────────────────────────────────────────────────── */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-}
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: rgba(27, 42, 74, 0.3);
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(196, 164, 58, 0.3);
-  border-radius: 2px;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(196, 164, 58, 0.5);
-}
-
-.scrollbar-hide::-webkit-scrollbar {
-  display: none;
-}
-.scrollbar-hide {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-/* ─── Leaflet Overrides ─────────────────────────────────────────────────────── */
-.leaflet-container {
-  width: 100%;
-  height: 100%;
-  background: #0D1A2D;
-  outline: none;
+/* ─── MapLibre Overrides ─────────────────────────────────────────────────────── */
+.maplibregl-map {
   font-family: 'Inter', system-ui, sans-serif;
 }
 
-/* Map tile historical look */
-.leaflet-tile-pane {
-  filter: sepia(18%) saturate(88%) brightness(0.82) contrast(1.08);
+.maplibregl-canvas-container,
+.maplibregl-canvas {
+  width: 100% !important;
+  height: 100% !important;
 }
 
-.leaflet-control-attribution {
-  background: rgba(15, 30, 56, 0.85) !important;
-  color: rgba(244, 236, 216, 0.3) !important;
+/* Historical sepia filter on tiles */
+.maplibregl-tile-pane {
+  filter: sepia(20%) saturate(80%) brightness(0.75) contrast(1.15) hue-rotate(-5deg);
+}
+
+/* Hide MapLibre controls (we use our own) */
+.maplibregl-ctrl-top-right,
+.maplibregl-ctrl-top-left,
+.maplibregl-ctrl-bottom-left { display: none; }
+
+.maplibregl-ctrl-bottom-right {
+  bottom: 80px;
+  right: 8px;
+}
+
+.maplibregl-ctrl-attrib {
+  background: rgba(7, 11, 20, 0.7) !important;
+  color: rgba(196, 164, 58, 0.35) !important;
   font-size: 9px !important;
-  border-radius: 4px 0 0 0 !important;
-  padding: 2px 5px !important;
-}
-.leaflet-control-attribution a {
-  color: rgba(196, 164, 58, 0.4) !important;
+  border-radius: 4px !important;
 }
 
-/* Hide zoom controls (we can add custom ones later) */
-.leaflet-control-zoom {
-  display: none;
+.maplibregl-ctrl-attrib a {
+  color: rgba(196, 164, 58, 0.5) !important;
 }
 
-/* ─── Battle Tooltip ────────────────────────────────────────────────────────── */
-.leaflet-battle-tooltip {
-  background: rgba(13, 26, 45, 0.97) !important;
-  border: 1px solid rgba(196, 164, 58, 0.35) !important;
-  border-radius: 10px !important;
-  padding: 7px 12px !important;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55) !important;
-  color: #F4ECD8 !important;
-  font-family: 'Inter', system-ui, sans-serif !important;
-  white-space: nowrap;
+/* ─── Battle Markers ─────────────────────────────────────────────────────────── */
+.battle-marker-wrapper {
+  cursor: pointer;
+  position: relative;
+  transform: translate(-50%, -50%);
+  will-change: transform;
+  transition: transform 0.15s ease;
+}
+
+.battle-marker-wrapper:hover {
+  transform: translate(-50%, -50%) scale(1.2);
+}
+
+.battle-marker-wrapper.selected {
+  transform: translate(-50%, -50%) scale(1.25);
+}
+
+.battle-marker-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  animation: markerGlowPulse 2.5s ease-in-out infinite;
   pointer-events: none;
 }
 
-.leaflet-battle-tooltip::before {
-  display: none !important;
+.battle-marker-wrapper.selected .battle-marker-glow {
+  animation: markerGlowPulse 1.2s ease-in-out infinite;
 }
 
-.battle-tooltip {
+.battle-marker-ping {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid;
+  animation: markerPingAnim 1.5s cubic-bezier(0,0,0.2,1) infinite;
+  pointer-events: none;
+}
+
+.battle-marker-core {
+  position: relative;
+  z-index: 1;
+  border-radius: 50%;
+  border: 2px solid;
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  transition: all 0.2s ease;
+  user-select: none;
 }
 
-.battle-tooltip strong {
-  display: block;
-  font-size: 12px;
+/* ─── Marker Animations ──────────────────────────────────────────────────────── */
+@keyframes markerGlowPulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.85); }
+  50%       { opacity: 0.9; transform: scale(1.15); }
+}
+
+@keyframes markerPingAnim {
+  0%        { transform: scale(0.95); opacity: 0.8; }
+  75%, 100% { transform: scale(2.2);  opacity: 0; }
+}
+
+/* ─── Map Tooltip ────────────────────────────────────────────────────────────── */
+.map-battle-tooltip {
+  position: fixed;
+  background: linear-gradient(135deg, rgba(13,21,32,0.97) 0%, rgba(7,11,20,0.99) 100%);
+  border: 1px solid rgba(196,164,58,0.3);
+  border-radius: 12px;
+  padding: 10px 14px;
+  pointer-events: none;
+  z-index: 9999;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  transform: translate(-50%, calc(-100% - 16px));
+  white-space: nowrap;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.map-battle-tooltip-name {
+  font-family: 'Playfair Display', serif;
+  font-size: 13px;
   font-weight: 600;
   color: #F4ECD8;
-  letter-spacing: 0.01em;
+  display: block;
 }
 
-.battle-tooltip span {
-  display: block;
-  font-size: 10px;
+.map-battle-tooltip-date {
+  font-family: 'Crimson Text', serif;
+  font-size: 11px;
   color: rgba(196, 164, 58, 0.7);
   font-style: italic;
+  display: block;
+  margin-top: 2px;
 }
 
-/* ─── Marker ping animation ─────────────────────────────────────────────────── */
-@keyframes ping {
-  75%, 100% {
-    transform: scale(2);
-    opacity: 0;
-  }
+.map-battle-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: rgba(196,164,58,0.3);
 }
 
-/* ─── Transitions ───────────────────────────────────────────────────────────── */
-.leaflet-marker-icon {
-  transition: opacity 0.3s ease;
-  cursor: pointer !important;
+/* ─── Bottom Sheet Handle ────────────────────────────────────────────────────── */
+.sheet-handle {
+  width: 36px;
+  height: 4px;
+  background: rgba(196, 164, 58, 0.3);
+  border-radius: 2px;
+  margin: 0 auto;
 }
 
-/* ─── Line clamp ────────────────────────────────────────────────────────────── */
+/* ─── Casualty Bar ───────────────────────────────────────────────────────────── */
+.casualty-bar-track {
+  height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.casualty-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.8s cubic-bezier(0.22,1,0.36,1);
+}
+
+/* ─── Timeline ───────────────────────────────────────────────────────────────── */
+.timeline-track {
+  position: relative;
+  height: 2px;
+  background: rgba(196, 164, 58, 0.15);
+  border-radius: 1px;
+}
+
+.timeline-progress {
+  height: 100%;
+  background: linear-gradient(90deg, #C4A43A, #E8C96B);
+  border-radius: 1px;
+  box-shadow: 0 0 8px rgba(196, 164, 58, 0.5);
+  transition: width 0.3s ease;
+}
+
+/* ─── Line clamp ─────────────────────────────────────────────────────────────── */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .line-clamp-3 {
   display: -webkit-box;
   -webkit-line-clamp: 3;
@@ -141,10 +266,31 @@
   overflow: hidden;
 }
 
-/* ─── Framer motion layout ──────────────────────────────────────────────────── */
-[data-framer-portal-id] {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 9999;
+.line-clamp-4 {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ─── Campaign mode overlay glow ────────────────────────────────────────────── */
+.campaign-active-border {
+  box-shadow: 0 0 0 1px rgba(196,164,58,0.4), 0 0 40px rgba(196,164,58,0.1) inset;
+}
+
+/* ─── Intro particles ────────────────────────────────────────────────────────── */
+.particle {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: rgba(196, 164, 58, 0.6);
+  border-radius: 50%;
+  animation: particleFloat linear infinite;
+}
+
+@keyframes particleFloat {
+  0%   { transform: translateY(0) translateX(0); opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 0.5; }
+  100% { transform: translateY(-100vh) translateX(40px); opacity: 0; }
 }

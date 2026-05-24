@@ -1,127 +1,58 @@
-import React, { useState, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Header } from './components/Header';
-import { BattleMap } from './components/BattleMap';
-import { Timeline } from './components/Timeline';
-import { BattleDetailPanel } from './components/BattleDetailPanel';
-import { SideControls } from './components/SideControls';
-import { CampaignOverlay } from './components/CampaignOverlay';
-import { useBattles } from './hooks/useBattles';
-import { useCampaign } from './hooks/useCampaign';
-import { battles as allBattles } from './data/battles';
-import type { AppFilters, Battle } from './types/battle';
+/**
+ * App — Root component. Assembles all layers of the experience:
+ *
+ * Layer stack (back → front):
+ *  1. MapView           (position: absolute, fills viewport)
+ *  2. Vignette overlays (inside MapView)
+ *  3. Header            (fixed top, z-50)
+ *  4. BattleListPanel   (fixed left, z-40)
+ *  5. FloatingControls  (fixed, z-20)
+ *  6. BattleDetail      (fixed right/bottom, z-40/50)
+ *  7. CampaignPlayer    (fixed bottom, z-40)
+ *  8. Timeline          (fixed bottom, z-30)
+ *  9. IntroScreen       (fixed, z-200)
+ */
 
-// ─── Default Filters ─────────────────────────────────────────────────────────
-const DEFAULT_FILTERS: AppFilters = {
-  search: '',
-  outcome: 'All',
-  year: null,
-};
+import React from 'react';
+import { AppProvider } from './context/AppContext';
+import { MapView } from './components/map/MapView';
+import { IntroScreen } from './components/ui/IntroScreen';
+import { Header } from './components/ui/Header';
+import { BattleListPanel } from './components/ui/BattleListPanel';
+import { BattleDetail } from './components/ui/BattleDetail';
+import { Timeline } from './components/ui/Timeline';
+import { CampaignPlayer } from './components/ui/CampaignPlayer';
+import { FloatingControls } from './components/ui/FloatingControls';
 
-// ─── App ─────────────────────────────────────────────────────────────────────
-export default function App() {
-  const [filters, setFilters] = useState<AppFilters>(DEFAULT_FILTERS);
-  const [selectedBattle, setSelectedBattle] = useState<Battle | null>(null);
-
-  // Filtered battles shown on the map and in the list
-  const filteredBattles = useBattles(filters);
-
-  // Campaign mode
-  const campaign = useCampaign(
-    useCallback((b: Battle) => {
-      setSelectedBattle(b);
-    }, [])
-  );
-
-  // Handle battle selection from map / list / timeline
-  const handleBattleSelect = useCallback(
-    (battle: Battle) => {
-      setSelectedBattle((prev) => (prev?.id === battle.id ? null : battle));
-    },
-    []
-  );
-
-  // Handle year filter from timeline
-  const handleYearSelect = useCallback((year: number | null) => {
-    setFilters((f) => ({ ...f, year }));
-  }, []);
-
+function AppInner() {
   return (
     <div
-      className="h-screen flex flex-col overflow-hidden bg-navy"
-      style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
+      className="fixed inset-0 overflow-hidden"
+      style={{ background: '#070B14' }}
     >
-      {/* ── Header ── */}
-      <Header
-        battles={allBattles}
-        filteredCount={filteredBattles.length}
-        isCampaignPlaying={campaign.isPlaying}
-        onToggleCampaign={campaign.toggle}
-        onResetCampaign={campaign.reset}
-      />
-
-      {/* ── Main Area ── */}
-      <div className="flex-1 relative overflow-hidden">
-        {/* Map */}
-        <BattleMap
-          battles={filteredBattles}
-          selectedBattle={selectedBattle}
-          campaignBattle={campaign.campaignBattle}
-          onBattleSelect={handleBattleSelect}
-        />
-
-        {/* Left side controls (search/filter/list) */}
-        <SideControls
-          filters={filters}
-          onFiltersChange={setFilters}
-          filteredBattles={filteredBattles}
-          onBattleSelect={handleBattleSelect}
-          selectedBattle={selectedBattle}
-        />
-
-        {/* Campaign narration overlay */}
-        <CampaignOverlay
-          battle={campaign.campaignBattle}
-          currentIndex={campaign.currentIndex}
-          totalCount={campaign.totalCount}
-          isPlaying={campaign.isPlaying}
-          onNext={campaign.next}
-          onPrev={campaign.prev}
-          onStop={campaign.stop}
-        />
-
-        {/* Loading indicator for initial mount */}
-        <AnimatePresence>
-          {filteredBattles.length === 0 && filters.search === '' && filters.outcome === 'All' && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none"
-            >
-              <div className="text-center">
-                <div className="text-4xl mb-3 animate-bounce">⚔️</div>
-                <p className="text-parchment-200/60 font-body text-sm italic">Loading battle data…</p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+      {/* ── 1. Map fills everything ─────────────────────────────────── */}
+      <div className="absolute inset-0">
+        <MapView />
       </div>
 
-      {/* ── Timeline ── */}
-      <Timeline
-        battles={filteredBattles}
-        selectedYear={filters.year}
-        onYearSelect={handleYearSelect}
-        selectedBattle={selectedBattle}
-        onBattleSelect={handleBattleSelect}
-      />
+      {/* ── 2. UI Layers ────────────────────────────────────────────── */}
+      <Header />
+      <BattleListPanel />
+      <FloatingControls />
+      <BattleDetail />
+      <CampaignPlayer />
+      <Timeline />
 
-      {/* ── Battle Detail Panel ── */}
-      <BattleDetailPanel
-        battle={selectedBattle}
-        onClose={() => setSelectedBattle(null)}
-      />
+      {/* ── 3. Intro (highest z-index) ──────────────────────────────── */}
+      <IntroScreen />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AppProvider>
+      <AppInner />
+    </AppProvider>
   );
 }
