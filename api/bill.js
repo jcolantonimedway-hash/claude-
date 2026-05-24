@@ -67,9 +67,15 @@ function getBillTextUrls(id) {
 }
 
 function getStatusUrls(id) {
+  const num = id.slice(1);         // "7149"
+  const type = id.charAt(0);       // "H"
   return [
     `http://status.rilegislature.gov/BillDetail.aspx?BillNum=${id}&year=${YEAR}`,
+    `https://status.rilegislature.gov/BillDetail.aspx?BillNum=${id}&year=${YEAR}`,
+    `http://status.rilegislature.gov/BillStatus.aspx?bill=${id}&year=${YEAR}`,
+    `http://status.rilegislature.gov/BillDetail.aspx?BillNum=${type}+${num}&year=${YEAR}`,
     `http://status.rilin.state.ri.us/BillDetail.aspx?BillNum=${id}&year=${YEAR}`,
+    `https://webserver.rilegislature.gov/BillText${YEAR_SHORT}/${type === 'H' ? 'HouseText' : 'SenateText'}${YEAR_SHORT}/${id}.htm`,
   ];
 }
 
@@ -272,11 +278,6 @@ export default async function handler(req, res) {
     }
   }
 
-  // Debug mode — return fetch diagnostics
-  if (debug) {
-    return res.status(200).json({ debug: true, identifier, fetchLog, billTextSnippet: billText.slice(0, 600) });
-  }
-
   if (!billText) {
     return res.status(404).json({
       error: `Bill ${identifier} not found. Check the bill number or try again — the RI legislature website may be temporarily unavailable.`,
@@ -288,14 +289,28 @@ export default async function handler(req, res) {
 
   // ── 3. Fetch action history ──────────────────────────────────
   let actions = [];
+  let statusLog = [];
   for (const statusUrl of getStatusUrls(identifier)) {
     try {
       const r = await fetchTextWithTimeout(statusUrl);
+      statusLog.push({ url: statusUrl, ok: r.ok, length: r.ok ? r.text.length : 0,
+        snippet: r.ok ? r.text.slice(0, 300) : null });
       if (r.ok && r.text.length > 200) {
         actions = parseStatusPage(r.text);
         if (actions.length > 0) break;
       }
-    } catch (_) { /* try next */ }
+    } catch (err) {
+      statusLog.push({ url: statusUrl, error: err.message });
+    }
+  }
+
+  // Debug mode — return full diagnostics including status site results
+  if (debug) {
+    return res.status(200).json({
+      debug: true, identifier, fetchLog, billTextSnippet: billText.slice(0, 600),
+      parsed: { title, primarySponsor, cosponsors, dateIntroduced, committee },
+      statusLog, actions,
+    });
   }
 
   // ── 4. Fallback actions from bill text ───────────────────────
