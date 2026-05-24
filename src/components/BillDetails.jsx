@@ -104,7 +104,7 @@ export default function BillDetails({ bill }) {
       {/* RI legislature link */}
       <div className="mt-4 pt-4 border-t border-slate-100">
         <a
-          href={`https://webserver.rilin.state.ri.us/BillText/BillText25/${bill.identifier.charAt(0)}/${bill.identifier}.htm`}
+          href={bill.riLegUrl || `https://webserver.rilin.state.ri.us/BillText/BillText${String(bill.session || '2025').slice(2)}/${bill.identifier.charAt(0)}/${bill.identifier}.htm`}
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-2 text-sm text-ri-navy hover:underline font-medium"
