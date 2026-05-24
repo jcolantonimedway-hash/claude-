@@ -353,11 +353,25 @@ function classifyDescription(desc) {
   const d = desc.toLowerCase();
   const classes = [];
   if (/introduced/i.test(d)) classes.push('introduction');
-  if (/referred to/i.test(d)) classes.push('referral-committee');
+
+  // Cross-chamber referral ("Referred to Senate..." / "Referred to House...")
+  // Do NOT tag as referral-committee — billUtils RI_DESCRIPTION_PATTERNS handles this
+  if (/referred to (the )?(senate|house)\b/i.test(d)) {
+    // intentionally empty — handled by description-pattern fallback in actionToStage
+  } else if (/referred to/i.test(d)) {
+    classes.push('referral-committee');
+  }
+
   if (/held for further study|recommended for study/i.test(d)) classes.push('committee-failure');
-  if (/reported out|reported favorably/i.test(d)) classes.push('committee-passage');
+
+  // RI phrases: "Committee recommends passage" / "Committee recommends passage in concurrence"
+  if (/reported out|reported favorably|committee recommends passage/i.test(d)) classes.push('committee-passage');
+
   if (/placed on.*calendar|scheduled for.*floor|second reading/i.test(d)) classes.push('reading-2');
-  if (/passed (the )?(house|senate)/i.test(d)) classes.push('passage');
+
+  // RI uses "House read and passed" / "Senate read and passed"
+  if (/\bread and passed\b|passed (the )?(house|senate)\b/i.test(d)) classes.push('passage');
+
   if (/failed/i.test(d) && !/referred/i.test(d)) classes.push('failure');
   if (/signed by (the )?governor/i.test(d)) classes.push('executive-signature');
   if (/vetoed/i.test(d)) classes.push('executive-veto');
@@ -383,15 +397,14 @@ function parseDateCell(text) {
 }
 
 function parseStatusPage(html) {
-  // ISO-8859-1 page — cheerio handles charset automatically
   const $ = cheerio.load(html, { decodeEntities: true });
   const actions = [];
 
+  // ── Strategy A: separate <td> cells — date in col 0, description in col 1 ──
   $('table tr').each((_, row) => {
     const cells = $(row).find('td');
     if (cells.length < 2) return;
 
-    // Strategy A: first cell is date, second is description
     const col0 = $(cells[0]).text().trim();
     const col1 = $(cells[1]).text().trim();
     let date = parseDateCell(col0);
@@ -401,7 +414,7 @@ function parseStatusPage(html) {
       return;
     }
 
-    // Strategy B: scan all cells for a date (GridView may have leading checkbox/icon col)
+    // Scan all cells for a date (GridView may have leading icon/checkbox col)
     for (let i = 0; i < cells.length - 1; i++) {
       const cellText = $(cells[i]).text().trim();
       date = parseDateCell(cellText);
@@ -415,6 +428,40 @@ function parseStatusPage(html) {
       }
     }
   });
+
+  if (actions.length > 0) return actions;
+
+  // ── Strategy B: single-cell rows where date + description are on the same line ──
+  // E.g. RI status page: "01/16/2026 Introduced, referred to House Municipal Government..."
+  $('table td').each((_, cell) => {
+    const text = $(cell).text().trim();
+    const m = text.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s+(.+)/s);
+    if (m) {
+      const date = parseDateCell(m[1]);
+      const desc = m[2].replace(/\s+/g, ' ').trim();
+      if (date && desc.length > 2) {
+        actions.push({ date, description: desc, classification: classifyDescription(desc) });
+      }
+    }
+  });
+
+  if (actions.length > 0) return actions;
+
+  // ── Strategy C: full-page text scan — handles <pre> blocks and any other layout ──
+  const fullText = $('body').text();
+  const seen = new Set();
+  for (const m of fullText.matchAll(/(\d{1,2}\/\d{1,2}\/\d{4})\s+([A-Za-z][^\n]{4,})/g)) {
+    const date = parseDateCell(m[1]);
+    // Strip trailing parenthesized scheduling date like "(03/24/2026)"
+    const desc = m[2].replace(/\s+/g, ' ').replace(/\s*\(\d{1,2}\/\d{1,2}\/\d{4}\)\s*$/, '').trim();
+    if (date && desc.length > 3) {
+      const key = `${date}|${desc}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        actions.push({ date, description: desc, classification: classifyDescription(desc) });
+      }
+    }
+  }
 
   return actions;
 }

@@ -93,23 +93,30 @@ const CLASSIFICATION_MAP = {
   'executive-veto': STAGE_IDS.VETOED,
 };
 
-// RI-specific phrases found in action descriptions
+// RI-specific phrases found in action descriptions (checked after classification map)
 const RI_DESCRIPTION_PATTERNS = [
-  { pattern: /held for further study/i, stage: STAGE_IDS.HELD_FOR_STUDY },
-  { pattern: /recommended for study/i, stage: STAGE_IDS.HELD_FOR_STUDY },
-  { pattern: /reported out/i, stage: STAGE_IDS.COMMITTEE_PASSED },
-  { pattern: /reported favorably/i, stage: STAGE_IDS.COMMITTEE_PASSED },
-  { pattern: /passed/i, stage: STAGE_IDS.PASSED_CHAMBER },
-  { pattern: /failed/i, stage: STAGE_IDS.FAILED_CHAMBER },
-  { pattern: /signed by governor/i, stage: STAGE_IDS.SIGNED },
-  { pattern: /vetoed/i, stage: STAGE_IDS.VETOED },
-  { pattern: /referred to senate/i, stage: STAGE_IDS.OTHER_CHAMBER_COMMITTEE },
-  { pattern: /referred to house/i, stage: STAGE_IDS.OTHER_CHAMBER_COMMITTEE },
+  // Terminal / special states
+  { pattern: /held for further study/i,           stage: STAGE_IDS.HELD_FOR_STUDY },
+  { pattern: /recommended for study/i,            stage: STAGE_IDS.HELD_FOR_STUDY },
+  { pattern: /signed by (the )?governor/i,        stage: STAGE_IDS.SIGNED },
+  { pattern: /vetoed/i,                           stage: STAGE_IDS.VETOED },
+  // Cross-chamber referral — must come before generic "referred to" / "passed"
+  { pattern: /referred to (the )?(senate|house)\b/i, stage: STAGE_IDS.OTHER_CHAMBER_COMMITTEE },
   { pattern: /transmit(ted)? to (the )?(senate|house)/i, stage: STAGE_IDS.OTHER_CHAMBER_COMMITTEE },
-  { pattern: /committee hearing/i, stage: STAGE_IDS.COMMITTEE },
-  { pattern: /scheduled for hearing/i, stage: STAGE_IDS.COMMITTEE },
-  { pattern: /second reading/i, stage: STAGE_IDS.FLOOR },
-  { pattern: /introduced/i, stage: STAGE_IDS.INTRODUCED },
+  // Committee outcomes
+  { pattern: /committee recommends passage/i,     stage: STAGE_IDS.COMMITTEE_PASSED },
+  { pattern: /reported out/i,                     stage: STAGE_IDS.COMMITTEE_PASSED },
+  { pattern: /reported favorably/i,               stage: STAGE_IDS.COMMITTEE_PASSED },
+  // Floor / passage
+  { pattern: /placed on.*calendar/i,              stage: STAGE_IDS.FLOOR },
+  { pattern: /second reading/i,                   stage: STAGE_IDS.FLOOR },
+  { pattern: /\bread and passed\b/i,              stage: STAGE_IDS.PASSED_CHAMBER },
+  { pattern: /passed/i,                           stage: STAGE_IDS.PASSED_CHAMBER },
+  { pattern: /failed/i,                           stage: STAGE_IDS.FAILED_CHAMBER },
+  // Earlier stages
+  { pattern: /committee hearing/i,                stage: STAGE_IDS.COMMITTEE },
+  { pattern: /scheduled for hearing/i,            stage: STAGE_IDS.COMMITTEE },
+  { pattern: /introduced/i,                       stage: STAGE_IDS.INTRODUCED },
 ];
 
 // Derive a stage ID from an OpenStates action object
@@ -153,13 +160,20 @@ export function computeBillStatus(actions) {
     if (!stage) continue;
 
     if (stage === STAGE_IDS.HELD_FOR_STUDY) {
-      currentStage = STAGE_IDS.COMMITTEE;
+      // Don't regress if we're already in the other chamber
+      const ci = stageOrder.indexOf(currentStage);
+      if (ci < stageOrder.indexOf(STAGE_IDS.OTHER_CHAMBER_COMMITTEE)) {
+        currentStage = STAGE_IDS.COMMITTEE;
+      }
       subStatus = 'held_for_study';
       isTerminal = true;
       continue;
     }
     if (stage === STAGE_IDS.COMMITTEE_FAILED) {
-      currentStage = STAGE_IDS.COMMITTEE;
+      const ci = stageOrder.indexOf(currentStage);
+      if (ci < stageOrder.indexOf(STAGE_IDS.OTHER_CHAMBER_COMMITTEE)) {
+        currentStage = STAGE_IDS.COMMITTEE;
+      }
       subStatus = 'failed_in_committee';
       isTerminal = true;
       continue;
@@ -176,7 +190,11 @@ export function computeBillStatus(actions) {
       continue;
     }
     if (stage === STAGE_IDS.COMMITTEE_PASSED) {
-      currentStage = STAGE_IDS.COMMITTEE;
+      // If we're already in the other chamber, don't regress to COMMITTEE
+      const ci = stageOrder.indexOf(currentStage);
+      if (ci < stageOrder.indexOf(STAGE_IDS.OTHER_CHAMBER_COMMITTEE)) {
+        currentStage = STAGE_IDS.COMMITTEE;
+      }
       subStatus = 'reported_out';
       isTerminal = false;
       continue;
