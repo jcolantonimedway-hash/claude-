@@ -10,17 +10,93 @@ const YEAR = '2026';
 const YEAR_SHORT = '26';
 
 // ──────────────────────────────────────────────────────────────────
-// URL builders
+// URL builders — try multiple domains/paths since RI changed infra
 // ──────────────────────────────────────────────────────────────────
 
-function getBillTextUrl(id) {
-  const chamber = id.startsWith('H') ? 'HouseText' : 'SenateText';
-  return `https://webserver.rilegislature.gov/BillText${YEAR_SHORT}/${chamber}${YEAR_SHORT}/${id}.htm`;
+function getBillTextUrls(id) {
+  const chamberFolder = id.startsWith('H') ? 'HouseText' : 'SenateText';
+  return [
+    // New 2026 domain
+    `https://webserver.rilegislature.gov/BillText${YEAR_SHORT}/${chamberFolder}${YEAR_SHORT}/${id}.htm`,
+    // Old domain still serving 2026 text
+    `https://webserver.rilin.state.ri.us/BillText/BillText${YEAR_SHORT}/${chamberFolder}${YEAR_SHORT}/${id}.htm`,
+    // Old domain, old path style
+    `https://webserver.rilin.state.ri.us/BillText${YEAR_SHORT}/${chamberFolder}${YEAR_SHORT}/${id}.htm`,
+  ];
 }
 
-function getStatusUrl(id) {
-  // RI status site — bill detail page
-  return `http://status.rilegislature.gov/BillDetail.aspx?BillNum=${id}&year=${YEAR}`;
+function getStatusUrls(id) {
+  return [
+    `http://status.rilegislature.gov/BillDetail.aspx?BillNum=${id}&year=${YEAR}`,
+    `http://status.rilin.state.ri.us/BillDetail.aspx?BillNum=${id}&year=${YEAR}`,
+  ];
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Fetch helper with timeout
+// ──────────────────────────────────────────────────────────────────
+
+async function fetchWithTimeout(url, opts = {}, ms = 9000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Referer': 'https://www.rilegislature.gov/',
+        ...opts.headers,
+      },
+      ...opts,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Try a list of URLs, returning the first successful response
+async function fetchFirstOk(urls) {
+  for (const url of urls) {
+    try {
+      const r = await fetchWithTimeout(url);
+      if (r.ok) return { res: r, url };
+    } catch (_) { /* try next */ }
+  }
+  return null;
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Extract bill text from HTML — try multiple strategies
+// ──────────────────────────────────────────────────────────────────
+
+function extractBillText(html) {
+  const $ = cheerio.load(html);
+
+  // Strategy 1: standard <pre> tag
+  const pre = $('pre').first().text();
+  if (pre && pre.trim().length > 80) return pre;
+
+  // Strategy 2: <pre> anywhere deeper
+  let longest = '';
+  $('pre').each((_, el) => {
+    const t = $(el).text();
+    if (t.length > longest.length) longest = t;
+  });
+  if (longest.trim().length > 80) return longest;
+
+  // Strategy 3: look for "AN ACT" in the full body text
+  const bodyText = $('body').text();
+  const actIdx = bodyText.search(/AN ACT/i);
+  if (actIdx !== -1) {
+    return bodyText.slice(actIdx);
+  }
+
+  // Strategy 4: just return the body text and let parser deal with it
+  if (bodyText.trim().length > 80) return bodyText;
+
+  return '';
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -28,7 +104,6 @@ function getStatusUrl(id) {
 // ──────────────────────────────────────────────────────────────────
 
 function parseBillText(rawText) {
-  // Normalise line endings and collapse excessive whitespace between lines
   const lines = rawText.replace(/\r\n?/g, '\n').split('\n').map(l => l.trim());
 
   let title = '';
@@ -37,7 +112,6 @@ function parseBillText(rawText) {
   let dateIntroduced = '';
   let committee = '';
 
-  // Collect title lines starting with "AN ACT"
   const titleLines = [];
   let inTitle = false;
 
@@ -51,10 +125,9 @@ function parseBillText(rawText) {
     }
 
     if (inTitle) {
-      // Title ends when we hit Introduced By / SECTION / blank line after collecting some
       if (/^(Introduced By:|SECTION\s+\d|It is enacted|Be it enacted)/i.test(line)) {
         inTitle = false;
-        // Fall through to process this line normally
+        // fall through to process this line
       } else if (line === '' && titleLines.length > 0) {
         inTitle = false;
         continue;
@@ -64,16 +137,13 @@ function parseBillText(rawText) {
       }
     }
 
-    // Sponsor line — may continue onto next line(s) before "Date Introduced"
     if (/^Introduced By:/i.test(line)) {
       let sponsorText = line.replace(/^Introduced By:\s*/i, '').trim();
-      // Peek ahead — if next line doesn't look like a key: value, it's a continuation
       let j = i + 1;
       while (j < lines.length && lines[j] !== '' && !/^(Date Introduced:|Referred To:)/i.test(lines[j])) {
         sponsorText += ' ' + lines[j];
         j++;
       }
-      // Split on " and " or ","
       const parts = sponsorText
         .replace(/\s+and\s+/gi, ',')
         .split(',')
@@ -81,7 +151,7 @@ function parseBillText(rawText) {
         .filter(Boolean);
       primarySponsor = parts[0] || '';
       cosponsors = parts.slice(1);
-      i = j - 1; // advance past absorbed lines
+      i = j - 1;
       continue;
     }
 
@@ -92,7 +162,6 @@ function parseBillText(rawText) {
 
     if (/^Referred To:/i.test(line)) {
       committee = line.replace(/^Referred To:\s*/i, '').trim();
-      // May continue onto next lines
       let j = i + 1;
       while (j < lines.length && lines[j] !== '' && !/^[A-Z][a-z]/.test(lines[j])) {
         committee += ' ' + lines[j];
@@ -126,22 +195,21 @@ function classifyDescription(desc) {
   if (/failed/i.test(d) && !/referred/i.test(d)) classes.push('failure');
   if (/signed by (the )?governor/i.test(d)) classes.push('executive-signature');
   if (/vetoed/i.test(d)) classes.push('executive-veto');
-  if (/(referred|transmitted|sent) to (the )?(house|senate)/i.test(d) &&
-      !/(committee)/i.test(d)) classes.push('referral-committee');
+  if (/(transmitted|sent) to (the )?(house|senate)/i.test(d) && !/committee/i.test(d)) {
+    classes.push('referral-committee');
+  }
 
   return classes;
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Status page parser  (status.rilegislature.gov)
+// Status page parser
 // ──────────────────────────────────────────────────────────────────
 
 function parseStatusPage(html) {
   const $ = cheerio.load(html);
   const actions = [];
 
-  // The RI status site renders a GridView table; each row is an action
-  // Look for rows with a date in the first cell
   $('table tr').each((_, row) => {
     const cells = $(row).find('td');
     if (cells.length < 2) return;
@@ -149,22 +217,17 @@ function parseStatusPage(html) {
     const col0 = $(cells[0]).text().trim();
     const col1 = $(cells[1]).text().trim();
 
-    // Date pattern: M/D/YYYY or MM/DD/YYYY
     const dateMatch = col0.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (!dateMatch) return;
+    if (!dateMatch || !col1) return;
 
     const date = `${dateMatch[3]}-${dateMatch[1].padStart(2, '0')}-${dateMatch[2].padStart(2, '0')}`;
-    const description = col1;
-    if (!description) return;
-
-    // Determine which chamber's action this is (col2 may have org)
-    const org = cells.length > 2 ? $(cells[2]).text().trim() : '';
+    const org = cells.length > 2 ? $(cells[2]).text().trim() : undefined;
 
     actions.push({
       date,
-      description,
-      classification: classifyDescription(description),
-      organization: org || undefined,
+      description: col1,
+      classification: classifyDescription(col1),
+      ...(org ? { organization: org } : {}),
     });
   });
 
@@ -178,23 +241,7 @@ function parseStatusPage(html) {
 function toISODate(natural) {
   if (!natural) return null;
   const d = new Date(natural);
-  if (isNaN(d.getTime())) return null;
-  return d.toISOString().split('T')[0];
-}
-
-// ──────────────────────────────────────────────────────────────────
-// Fetch helper with timeout
-// ──────────────────────────────────────────────────────────────────
-
-async function fetchWithTimeout(url, opts = {}, ms = 8000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    const res = await fetch(url, { ...opts, signal: controller.signal });
-    return res;
-  } finally {
-    clearTimeout(timer);
-  }
+  return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -206,62 +253,68 @@ export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json');
 
   const identifier = (req.query.identifier || '').trim().toUpperCase().replace(/\s+/g, '');
+  const debug = req.query.debug === '1';
 
   if (!identifier || !/^[HS]\d+$/.test(identifier)) {
     return res.status(400).json({ error: 'Invalid bill identifier. Use format like H7149 or S2977.' });
   }
 
-  // ── 1. Fetch bill text ───────────────────────────────────────────
-  const billTextUrl = getBillTextUrl(identifier);
-  let billHtml;
-  try {
-    const r = await fetchWithTimeout(billTextUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RIBillTracker/1.0; +https://claude-beta-one.vercel.app)' },
+  // ── 1. Fetch bill text (try multiple URLs) ───────────────────────
+  const billUrls = getBillTextUrls(identifier);
+  const billFetch = await fetchFirstOk(billUrls);
+
+  if (!billFetch) {
+    return res.status(404).json({
+      error: `Bill ${identifier} not found. The bill number may be incorrect or not yet available for the 2026 session.`,
     });
-    if (!r.ok) {
-      return res.status(404).json({
-        error: `Bill ${identifier} not found. Check that the bill number is correct for the 2026 session.`,
-      });
-    }
-    billHtml = await r.text();
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      return res.status(504).json({ error: 'RI legislature website timed out. Try again in a moment.' });
-    }
-    return res.status(502).json({ error: 'Could not reach the RI legislature website. Try again.' });
   }
 
-  // ── 2. Parse bill text ───────────────────────────────────────────
-  const $bill = cheerio.load(billHtml);
-  const preText = $bill('pre').first().text();
+  const { res: billResponse, url: billTextUrl } = billFetch;
+  const billHtml = await billResponse.text();
 
-  if (!preText || preText.trim().length < 50) {
-    return res.status(422).json({ error: `Could not parse bill text for ${identifier}. The bill may not be available yet.` });
+  // Debug mode: return raw HTML info
+  if (debug) {
+    const $ = cheerio.load(billHtml);
+    return res.status(200).json({
+      debug: true,
+      url: billTextUrl,
+      htmlLength: billHtml.length,
+      preCount: $('pre').length,
+      preLength: $('pre').first().text().length,
+      bodyTextLength: $('body').text().length,
+      bodyTextSnippet: $('body').text().slice(0, 500),
+      titleTag: $('title').text(),
+    });
   }
 
-  const { title, primarySponsor, cosponsors, dateIntroduced, committee } = parseBillText(preText);
+  // ── 2. Extract + parse bill text ────────────────────────────────
+  const billText = extractBillText(billHtml);
+
+  if (!billText || billText.trim().length < 30) {
+    return res.status(422).json({
+      error: `Bill ${identifier} text could not be read from the RI legislature website. Try again in a moment.`,
+      _debug: { url: billTextUrl, htmlLength: billHtml.length },
+    });
+  }
+
+  const { title, primarySponsor, cosponsors, dateIntroduced, committee } = parseBillText(billText);
 
   // ── 3. Fetch action history ──────────────────────────────────────
   let actions = [];
-  try {
-    const statusUrl = getStatusUrl(identifier);
-    const sr = await fetchWithTimeout(statusUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RIBillTracker/1.0)' },
-    }, 8000);
-    if (sr.ok) {
-      const statusHtml = await sr.text();
+  const statusFetch = await fetchFirstOk(getStatusUrls(identifier));
+  if (statusFetch) {
+    try {
+      const statusHtml = await statusFetch.res.text();
       actions = parseStatusPage(statusHtml);
-    }
-  } catch (_) {
-    // Status fetch failed — fall back to synthesising from bill text
+    } catch (_) { /* ignore */ }
   }
 
-  // ── 4. Fall back: synthesise introduction action from bill text ──
-  if (actions.length === 0 && dateIntroduced) {
-    const isoDate = toISODate(dateIntroduced) || YEAR + '-01-01';
+  // ── 4. Fall back: synthesise from bill text ──────────────────────
+  if (actions.length === 0) {
+    const isoDate = toISODate(dateIntroduced) || `${YEAR}-01-01`;
     const introDesc = committee
       ? `Introduced, referred to ${committee}`
-      : `Introduced`;
+      : 'Introduced';
     actions.push({
       date: isoDate,
       description: introDesc,
@@ -269,10 +322,9 @@ export default async function handler(req, res) {
     });
   }
 
-  // Sort chronologically
   actions.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
-  const latestAction = actions.length ? actions[actions.length - 1] : null;
+  const latestAction = actions[actions.length - 1];
   const chamber = identifier.startsWith('H') ? 'House' : 'Senate';
 
   return res.status(200).json({
