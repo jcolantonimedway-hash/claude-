@@ -67,10 +67,12 @@ function getBillTextUrls(id) {
 }
 
 function getStatusUrls(id) {
-  // These are now only used as fallback GET attempts
+  const numOnly = id.slice(1); // "7149" from "H7149"
+  // Fallback GET attempts — try numeric-only bill number and various URL patterns
   return [
-    `http://status.rilegislature.gov/BillDetail.aspx?BillNum=${id}&year=${YEAR}`,
-    `https://status.rilegislature.gov/BillDetail.aspx?BillNum=${id}&year=${YEAR}`,
+    `https://status.rilegislature.gov/BillDetail.aspx?BillNum=${numOnly}&year=${YEAR}`,
+    `http://status.rilegislature.gov/BillDetail.aspx?BillNum=${numOnly}&year=${YEAR}`,
+    `https://status.rilegislature.gov/Default.aspx?Year=${YEAR}&Bills=${numOnly}&BillTo=${numOnly}`,
   ];
 }
 
@@ -79,49 +81,58 @@ function getStatusUrls(id) {
 // The RI status site uses ViewState — we GET the form first, then POST.
 // ──────────────────────────────────────────────────────────────────
 
-const STATUS_HOME = 'http://status.rilegislature.gov/';
+const STATUS_HOME = 'https://status.rilegislature.gov/';
 
-// Regex-based extraction of ALL input/select fields from raw HTML
-// (more reliable than cheerio for byte-position-sensitive parsing)
+// Extract ALL form fields with their default values so the POST body
+// matches what a real browser would submit.
 function extractFormFields(html) {
-  const fields = {};
-
-  // Hidden ASP.NET fields
-  for (const m of html.matchAll(/name="(__VIEWSTATE[^"]*|__EVENTVALIDATION[^"]*)"\s+(?:id="[^"]*"\s+)?value="([^"]*)"/gi)) {
-    fields[m[1]] = m[2];
-  }
-  // Also try reversed attribute order
-  for (const m of html.matchAll(/value="([^"]*)"\s+[^>]*name="(__VIEWSTATE[^"]*|__EVENTVALIDATION[^"]*)"/gi)) {
-    fields[m[2]] = m[1];
-  }
-
-  // All <input> tags — collect name, type, value
+  // ── 1. All <input> tags ────────────────────────────────────────────
   const inputs = [];
-  for (const m of html.matchAll(/<input([^>]+)>/gi)) {
+  for (const m of html.matchAll(/<input([^>]+?)(?:\/>|>)/gi)) {
     const attrs = m[1];
     const nameM  = attrs.match(/name="([^"]+)"/i);
     const typeM  = attrs.match(/type="([^"]+)"/i);
     const valueM = attrs.match(/value="([^"]*)"/i);
-    if (nameM) inputs.push({ name: nameM[1], type: (typeM?.[1] || 'text').toLowerCase(), value: valueM?.[1] || '' });
+    if (!nameM) continue;
+    inputs.push({
+      name:  nameM[1],
+      type:  (typeM?.[1] || 'text').toLowerCase(),
+      value: valueM?.[1] ?? '',
+    });
   }
 
-  // All <select> tags
+  // ── 2. All <select> tags with their selected (or first) option ─────
   const selects = [];
   for (const m of html.matchAll(/<select([^>]+)>([\s\S]*?)<\/select>/gi)) {
     const nameM = m[1].match(/name="([^"]+)"/i);
     if (!nameM) continue;
     const options = [];
-    for (const opt of m[2].matchAll(/<option[^>]*value="([^"]*)"[^>]*>(.*?)<\/option>/gi)) {
-      options.push({ value: opt[1], text: opt[2].replace(/<[^>]+>/g, '').trim() });
+    let defaultValue = '';
+    for (const opt of m[2].matchAll(/<option([^>]*)>([\s\S]*?)<\/option>/gi)) {
+      const valM = opt[1].match(/value="([^"]*)"/i);
+      const isSel = /\bselected\b/i.test(opt[1]);
+      const val = valM?.[1] ?? '';
+      options.push({ value: val, text: opt[2].replace(/<[^>]+>/g, '').trim(), selected: isSel });
+      if (isSel && !defaultValue) defaultValue = val;
     }
-    selects.push({ name: nameM[1], options });
+    if (!defaultValue && options.length > 0) defaultValue = options[0].value;
+    selects.push({ name: nameM[1], options, defaultValue });
   }
 
-  // Submit buttons
-  const submits = inputs.filter(i => i.type === 'submit' || i.type === 'image');
+  // ── 3. Build the `fields` map from EVERY hidden input + every select ─
+  // This is what a real browser sends — all form fields with default values.
+  const fields = {};
+  for (const inp of inputs) {
+    if (inp.type === 'hidden') fields[inp.name] = inp.value;
+  }
+  for (const sel of selects) {
+    fields[sel.name] = sel.defaultValue;
+  }
 
-  // Non-hidden text inputs (bill number field candidates)
-  const textInputs = inputs.filter(i => i.type === 'text' || (i.type !== 'hidden' && i.type !== 'submit' && i.type !== 'button'));
+  const submits    = inputs.filter(i => i.type === 'submit' || i.type === 'image');
+  const textInputs = inputs.filter(i =>
+    !['hidden','submit','image','button','reset','file','checkbox','radio'].includes(i.type)
+  );
 
   return { fields, inputs, selects, submits, textInputs };
 }
@@ -212,7 +223,7 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
         ...BROWSER_HEADERS,
         'Content-Type': 'application/x-www-form-urlencoded',
         'Referer': STATUS_HOME,
-        'Origin': 'http://status.rilegislature.gov',
+        'Origin': 'https://status.rilegislature.gov',
         ...(sessionCookies ? { Cookie: sessionCookies } : {}),
       },
       body: body.toString(),
