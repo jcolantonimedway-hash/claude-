@@ -68,11 +68,20 @@ function getBillTextUrls(id) {
 
 function getStatusUrls(id) {
   const numOnly = id.slice(1); // "7149" from "H7149"
-  // Fallback GET attempts — try numeric-only bill number and various URL patterns
+  const isHouse = id.startsWith('H');
+  const chamberFolder = isHouse ? 'HouseText' : 'SenateText';
+
+  // Try multiple sources: RI status site variants + webserver sibling paths
   return [
+    // RI status site — numeric bill number
     `https://status.rilegislature.gov/BillDetail.aspx?BillNum=${numOnly}&year=${YEAR}`,
-    `http://status.rilegislature.gov/BillDetail.aspx?BillNum=${numOnly}&year=${YEAR}`,
     `https://status.rilegislature.gov/Default.aspx?Year=${YEAR}&Bills=${numOnly}&BillTo=${numOnly}`,
+    // webserver.rilegislature.gov — sibling paths to BillText26 that might have history
+    `https://webserver.rilegislature.gov/Journals26/${isHouse ? 'House' : 'Senate'}Journal26/${id}.htm`,
+    `https://webserver.rilegislature.gov/BillHistory26/${isHouse ? 'House' : 'Senate'}History26/${id}.htm`,
+    `https://webserver.rilegislature.gov/BillAmend26/${chamberFolder}26/${id}aa.htm`,
+    // Old domain
+    `https://webserver.rilin.state.ri.us/BillHistory/BillHistory${YEAR_SHORT}/${isHouse ? 'House' : 'Senate'}History${YEAR_SHORT}/${id}.htm`,
   ];
 }
 
@@ -657,15 +666,16 @@ export default async function handler(req, res) {
     actions = osActions;
   }
 
-  // Fallback 2: RI status GET attempts
+  // Fallback 2: GET attempts across multiple URL patterns
   if (actions.length === 0) {
     for (const statusUrl of getStatusUrls(identifier)) {
       try {
         const r = await fetchTextWithTimeout(statusUrl);
-        statusLog.push({ method: 'GET', url: statusUrl, ok: r.ok, length: r.ok ? r.text.length : 0 });
-        if (r.ok && r.text.length > 200) {
-          actions = parseStatusPage(r.text);
-          if (actions.length > 0) break;
+        const snippet = r.ok ? r.text.slice(0, 300).replace(/\s+/g, ' ') : '';
+        statusLog.push({ method: 'GET', url: statusUrl, ok: r.ok, length: r.ok ? r.text.length : 0, snippet });
+        if (r.ok && r.text.length > 500) {
+          const parsed = parseStatusPage(r.text);
+          if (parsed.length > 0) { actions = parsed; break; }
         }
       } catch (err) {
         statusLog.push({ method: 'GET', url: statusUrl, error: err.message });
