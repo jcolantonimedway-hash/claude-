@@ -1,5 +1,12 @@
 {
-  "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  "version": 2,
+  "builds": [
+    { "src": "api/bill.js", "use": "@vercel/node" },
+    { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "dist" } }
+  ],
+  "routes": [
+    { "src": "/api/bill(.*)", "dest": "/api/bill.js" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
