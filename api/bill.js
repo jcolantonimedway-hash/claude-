@@ -67,16 +67,114 @@ function getBillTextUrls(id) {
 }
 
 function getStatusUrls(id) {
-  const num = id.slice(1);         // "7149"
-  const type = id.charAt(0);       // "H"
+  // These are now only used as fallback GET attempts
   return [
     `http://status.rilegislature.gov/BillDetail.aspx?BillNum=${id}&year=${YEAR}`,
     `https://status.rilegislature.gov/BillDetail.aspx?BillNum=${id}&year=${YEAR}`,
-    `http://status.rilegislature.gov/BillStatus.aspx?bill=${id}&year=${YEAR}`,
-    `http://status.rilegislature.gov/BillDetail.aspx?BillNum=${type}+${num}&year=${YEAR}`,
-    `http://status.rilin.state.ri.us/BillDetail.aspx?BillNum=${id}&year=${YEAR}`,
-    `https://webserver.rilegislature.gov/BillText${YEAR_SHORT}/${type === 'H' ? 'HouseText' : 'SenateText'}${YEAR_SHORT}/${id}.htm`,
   ];
+}
+
+// ──────────────────────────────────────────────────────────────────
+// ASP.NET WebForms POST-based status fetch
+// The RI status site uses ViewState — we GET the form first, then POST.
+// ──────────────────────────────────────────────────────────────────
+
+const STATUS_BASE = 'http://status.rilegislature.gov/BillDetail.aspx';
+
+async function fetchStatusViaPost(identifier, ms = 10000) {
+  // Step 1: GET the search form to harvest ViewState + field names
+  let formHtml;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    const getRes = await fetch(STATUS_BASE, {
+      signal: controller.signal,
+      headers: { ...BROWSER_HEADERS, Referer: 'http://status.rilegislature.gov/' },
+    });
+    clearTimeout(timer);
+    if (!getRes.ok) return null;
+    formHtml = await getRes.text();
+  } catch {
+    return null;
+  }
+
+  const $form = cheerio.load(formHtml);
+
+  // Extract ASP.NET hidden fields
+  const viewState       = $form('input[name="__VIEWSTATE"]').val() || '';
+  const eventValidation = $form('input[name="__EVENTVALIDATION"]').val() || '';
+  const viewStateGen    = $form('input[name="__VIEWSTATEGENERATOR"]').val() || '';
+
+  // Find bill-number input field (text inputs, excluding hidden)
+  let billFieldName = '';
+  $form('input[type="text"], input[type="Text"]').each((_, el) => {
+    const name = $form(el).attr('name') || '';
+    if (/bill|num/i.test(name)) { billFieldName = name; return false; }
+  });
+  if (!billFieldName) {
+    // Fallback: pick first non-hidden text input
+    $form('input').each((_, el) => {
+      const type = ($form(el).attr('type') || '').toLowerCase();
+      const name = $form(el).attr('name') || '';
+      if ((type === 'text' || type === '') && name && !name.startsWith('__')) {
+        billFieldName = name;
+        return false;
+      }
+    });
+  }
+
+  // Find year/session dropdown
+  let yearFieldName = '';
+  let yearFieldValue = YEAR;
+  $form('select').each((_, el) => {
+    const name = $form(el).attr('name') || '';
+    if (/year|session/i.test(name)) {
+      yearFieldName = name;
+      // Find the option matching our year
+      $form(el).find('option').each((__, opt) => {
+        const val = $form(opt).attr('value') || '';
+        if (val.includes(YEAR)) { yearFieldValue = val; return false; }
+      });
+      return false;
+    }
+  });
+
+  // Find submit button
+  let submitName = '', submitValue = '';
+  $form('input[type="submit"], input[type="Submit"]').first().each((_, el) => {
+    submitName  = $form(el).attr('name')  || '';
+    submitValue = $form(el).attr('value') || 'Search';
+  });
+
+  // Build form body
+  const body = new URLSearchParams();
+  if (viewState)       body.set('__VIEWSTATE',          viewState);
+  if (eventValidation) body.set('__EVENTVALIDATION',    eventValidation);
+  if (viewStateGen)    body.set('__VIEWSTATEGENERATOR', viewStateGen);
+  if (billFieldName)   body.set(billFieldName, identifier);
+  if (yearFieldName)   body.set(yearFieldName, yearFieldValue);
+  if (submitName)      body.set(submitName, submitValue);
+
+  // Step 2: POST
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    const postRes = await fetch(STATUS_BASE, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        ...BROWSER_HEADERS,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': STATUS_BASE,
+      },
+      body: body.toString(),
+    });
+    clearTimeout(timer);
+    if (!postRes.ok) return null;
+    return { html: await postRes.text(), formFieldNames: { billFieldName, yearFieldName, submitName } };
+  } catch {
+    return null;
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -321,32 +419,50 @@ export default async function handler(req, res) {
   // ── 2. Parse bill text ───────────────────────────────────────
   const { title, primarySponsor, cosponsors, dateIntroduced, committee } = parseBillText(billText);
 
-  // ── 3. Fetch action history ──────────────────────────────────
+  // ── 3. Fetch action history (POST-based WebForms, then GET fallback) ──
   let actions = [];
   let statusLog = [];
-  for (const statusUrl of getStatusUrls(identifier)) {
-    try {
-      const r = await fetchTextWithTimeout(statusUrl);
-      // For debug: grab middle of the HTML where the data table likely lives
-      const mid = r.ok ? Math.floor(r.text.length / 2) : 0;
-      statusLog.push({ url: statusUrl, ok: r.ok, length: r.ok ? r.text.length : 0,
-        snippetStart: r.ok ? r.text.slice(0, 400) : null,
-        snippetMid: r.ok ? r.text.slice(mid, mid + 800) : null });
-      if (r.ok && r.text.length > 200) {
-        actions = parseStatusPage(r.text);
-        if (actions.length > 0) break;
+
+  // Primary: ASP.NET POST approach
+  try {
+    const postResult = await fetchStatusViaPost(identifier);
+    if (postResult) {
+      const { html: postHtml, formFieldNames } = postResult;
+      statusLog.push({
+        method: 'POST', url: STATUS_BASE, length: postHtml.length,
+        formFieldNames,
+        snippet2000: postHtml.slice(2000, 5000),
+      });
+      actions = parseStatusPage(postHtml);
+    } else {
+      statusLog.push({ method: 'POST', url: STATUS_BASE, ok: false });
+    }
+  } catch (err) {
+    statusLog.push({ method: 'POST', error: err.message });
+  }
+
+  // Fallback: GET attempts
+  if (actions.length === 0) {
+    for (const statusUrl of getStatusUrls(identifier)) {
+      try {
+        const r = await fetchTextWithTimeout(statusUrl);
+        statusLog.push({ method: 'GET', url: statusUrl, ok: r.ok, length: r.ok ? r.text.length : 0 });
+        if (r.ok && r.text.length > 200) {
+          actions = parseStatusPage(r.text);
+          if (actions.length > 0) break;
+        }
+      } catch (err) {
+        statusLog.push({ method: 'GET', url: statusUrl, error: err.message });
       }
-    } catch (err) {
-      statusLog.push({ url: statusUrl, error: err.message });
     }
   }
 
   // Debug mode — return full diagnostics including status site results
   if (debug) {
     return res.status(200).json({
-      debug: true, identifier, fetchLog, billTextSnippet: billText.slice(0, 600),
+      debug: true, identifier, fetchLog, billTextSnippet: billText.slice(0, 400),
       parsed: { title, primarySponsor, cosponsors, dateIntroduced, committee },
-      statusLog, actions,
+      statusLog, actionsFound: actions.length, actions,
     });
   }
 
