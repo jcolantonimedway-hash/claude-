@@ -175,12 +175,10 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
 
   // Build POST body
   const body = new URLSearchParams(fields);
-  if (billFieldName)   body.set(billFieldName, identifier);
-  else                 body.set('ctl00$ContentPlaceHolder1$txtBillNum', identifier);
-  if (yearFieldName)   body.set(yearFieldName, yearFieldValue);
-  else                 body.set('ctl00$ContentPlaceHolder1$ddlYear', YEAR);
-  if (submitName)      body.set(submitName, submitValue);
-  else                 body.set('ctl00$ContentPlaceHolder1$btnSearch', 'Search');
+  // Use discovered field names; fall back to confirmed RI status site names
+  body.set(billFieldName || 'ctl00$rilinContent$txtReport',  identifier);
+  body.set(yearFieldName  || 'ctl00$rilinContent$cbYear',    yearFieldValue || YEAR);
+  body.set(submitName     || 'ctl00$rilinContent$cmdReport', submitValue || 'View');
 
   // Step 2: POST to the form action
   try {
@@ -468,10 +466,16 @@ export default async function handler(req, res) {
     const postResult = await fetchStatusViaPost(identifier);
     if (postResult) {
       const { html: postHtml, formFieldNames } = postResult;
+      // Find "BEGIN PAGE CONTENT" in POST response — that's where the bill table lives
+      const pageContentIdx = postHtml.indexOf('BEGIN PAGE CONTENT');
+      const tableIdx       = postHtml.indexOf('<table', pageContentIdx > 0 ? pageContentIdx : 0);
       statusLog.push({
         method: 'POST', url: STATUS_HOME, length: postHtml.length,
         meta: postResult.meta,
-        postSnippet5k: postHtml.slice(5000, 8500),
+        pageContentIdx,
+        postContentSnippet: pageContentIdx >= 0
+          ? postHtml.slice(pageContentIdx, pageContentIdx + 3000)
+          : postHtml.slice(postHtml.length - 4000), // fallback: end of doc
       });
       actions = parseStatusPage(postHtml);
     } else {
