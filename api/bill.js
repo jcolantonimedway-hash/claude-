@@ -81,9 +81,54 @@ function getStatusUrls(id) {
 
 const STATUS_BASE = 'http://status.rilegislature.gov/BillDetail.aspx';
 
-async function fetchStatusViaPost(identifier, ms = 10000) {
-  // Step 1: GET the search form to harvest ViewState + field names
-  let formHtml;
+// Regex-based extraction of ALL input/select fields from raw HTML
+// (more reliable than cheerio for byte-position-sensitive parsing)
+function extractFormFields(html) {
+  const fields = {};
+
+  // Hidden ASP.NET fields
+  for (const m of html.matchAll(/name="(__VIEWSTATE[^"]*|__EVENTVALIDATION[^"]*)"\s+(?:id="[^"]*"\s+)?value="([^"]*)"/gi)) {
+    fields[m[1]] = m[2];
+  }
+  // Also try reversed attribute order
+  for (const m of html.matchAll(/value="([^"]*)"\s+[^>]*name="(__VIEWSTATE[^"]*|__EVENTVALIDATION[^"]*)"/gi)) {
+    fields[m[2]] = m[1];
+  }
+
+  // All <input> tags — collect name, type, value
+  const inputs = [];
+  for (const m of html.matchAll(/<input([^>]+)>/gi)) {
+    const attrs = m[1];
+    const nameM  = attrs.match(/name="([^"]+)"/i);
+    const typeM  = attrs.match(/type="([^"]+)"/i);
+    const valueM = attrs.match(/value="([^"]*)"/i);
+    if (nameM) inputs.push({ name: nameM[1], type: (typeM?.[1] || 'text').toLowerCase(), value: valueM?.[1] || '' });
+  }
+
+  // All <select> tags
+  const selects = [];
+  for (const m of html.matchAll(/<select([^>]+)>([\s\S]*?)<\/select>/gi)) {
+    const nameM = m[1].match(/name="([^"]+)"/i);
+    if (!nameM) continue;
+    const options = [];
+    for (const opt of m[2].matchAll(/<option[^>]*value="([^"]*)"[^>]*>(.*?)<\/option>/gi)) {
+      options.push({ value: opt[1], text: opt[2].replace(/<[^>]+>/g, '').trim() });
+    }
+    selects.push({ name: nameM[1], options });
+  }
+
+  // Submit buttons
+  const submits = inputs.filter(i => i.type === 'submit' || i.type === 'image');
+
+  // Non-hidden text inputs (bill number field candidates)
+  const textInputs = inputs.filter(i => i.type === 'text' || (i.type !== 'hidden' && i.type !== 'submit' && i.type !== 'button'));
+
+  return { fields, inputs, selects, submits, textInputs };
+}
+
+async function fetchStatusViaPost(identifier, ms = 12000) {
+  // Step 1: GET the search form page
+  let formHtml = '';
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ms);
@@ -98,62 +143,40 @@ async function fetchStatusViaPost(identifier, ms = 10000) {
     return null;
   }
 
-  const $form = cheerio.load(formHtml);
+  const { fields, selects, submits, textInputs } = extractFormFields(formHtml);
 
-  // Extract ASP.NET hidden fields
-  const viewState       = $form('input[name="__VIEWSTATE"]').val() || '';
-  const eventValidation = $form('input[name="__EVENTVALIDATION"]').val() || '';
-  const viewStateGen    = $form('input[name="__VIEWSTATEGENERATOR"]').val() || '';
+  // Bill number field: first visible text input
+  const billInput = textInputs[0];
+  const billFieldName = billInput?.name || '';
 
-  // Find bill-number input field (text inputs, excluding hidden)
-  let billFieldName = '';
-  $form('input[type="text"], input[type="Text"]').each((_, el) => {
-    const name = $form(el).attr('name') || '';
-    if (/bill|num/i.test(name)) { billFieldName = name; return false; }
-  });
-  if (!billFieldName) {
-    // Fallback: pick first non-hidden text input
-    $form('input').each((_, el) => {
-      const type = ($form(el).attr('type') || '').toLowerCase();
-      const name = $form(el).attr('name') || '';
-      if ((type === 'text' || type === '') && name && !name.startsWith('__')) {
-        billFieldName = name;
-        return false;
-      }
-    });
-  }
-
-  // Find year/session dropdown
+  // Year field: any select with a year-looking option
   let yearFieldName = '';
   let yearFieldValue = YEAR;
-  $form('select').each((_, el) => {
-    const name = $form(el).attr('name') || '';
-    if (/year|session/i.test(name)) {
-      yearFieldName = name;
-      // Find the option matching our year
-      $form(el).find('option').each((__, opt) => {
-        const val = $form(opt).attr('value') || '';
-        if (val.includes(YEAR)) { yearFieldValue = val; return false; }
-      });
-      return false;
+  for (const sel of selects) {
+    const yearOpt = sel.options.find(o => o.value.includes(YEAR) || o.text.includes(YEAR));
+    if (yearOpt) {
+      yearFieldName  = sel.name;
+      yearFieldValue = yearOpt.value || YEAR;
+      break;
     }
-  });
+  }
 
-  // Find submit button
-  let submitName = '', submitValue = '';
-  $form('input[type="submit"], input[type="Submit"]').first().each((_, el) => {
-    submitName  = $form(el).attr('name')  || '';
-    submitValue = $form(el).attr('value') || 'Search';
-  });
+  // Submit
+  const submitBtn = submits[0];
+  const submitName  = submitBtn?.name  || '';
+  const submitValue = submitBtn?.value || 'Search';
 
-  // Build form body
-  const body = new URLSearchParams();
-  if (viewState)       body.set('__VIEWSTATE',          viewState);
-  if (eventValidation) body.set('__EVENTVALIDATION',    eventValidation);
-  if (viewStateGen)    body.set('__VIEWSTATEGENERATOR', viewStateGen);
+  // Build POST body — start from all harvested hidden fields
+  const body = new URLSearchParams(fields);
   if (billFieldName)   body.set(billFieldName, identifier);
-  if (yearFieldName)   body.set(yearFieldName, yearFieldValue);
+  else {
+    // Hardcoded fallback names seen on RI status sites
+    body.set('ctl00$ContentPlaceHolder1$txtBillNum', identifier);
+  }
+  if (yearFieldName)   body.set(yearFieldName,   yearFieldValue);
+  else                 body.set('ctl00$ContentPlaceHolder1$ddlYear', YEAR);
   if (submitName)      body.set(submitName, submitValue);
+  else                 body.set('ctl00$ContentPlaceHolder1$btnSearch', 'Search');
 
   // Step 2: POST
   try {
@@ -166,12 +189,19 @@ async function fetchStatusViaPost(identifier, ms = 10000) {
         ...BROWSER_HEADERS,
         'Content-Type': 'application/x-www-form-urlencoded',
         'Referer': STATUS_BASE,
+        'Origin': 'http://status.rilegislature.gov',
       },
       body: body.toString(),
     });
     clearTimeout(timer);
     if (!postRes.ok) return null;
-    return { html: await postRes.text(), formFieldNames: { billFieldName, yearFieldName, submitName } };
+    const postHtml = await postRes.text();
+    return {
+      html: postHtml,
+      meta: { billFieldName, yearFieldName, submitName, textInputCount: textInputs.length,
+              selectCount: selects.length, viewStateLen: (fields.__VIEWSTATE || '').length,
+              formHtmlSnippet: formHtml.slice(5000, 8500) }, // body content area
+    };
   } catch {
     return null;
   }
@@ -430,8 +460,8 @@ export default async function handler(req, res) {
       const { html: postHtml, formFieldNames } = postResult;
       statusLog.push({
         method: 'POST', url: STATUS_BASE, length: postHtml.length,
-        formFieldNames,
-        snippet2000: postHtml.slice(2000, 5000),
+        meta: postResult.meta,
+        postSnippet5k: postHtml.slice(5000, 8500),
       });
       actions = parseStatusPage(postHtml);
     } else {
