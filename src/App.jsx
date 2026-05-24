@@ -109,7 +109,7 @@ export default function App() {
           <span>Rhode Island Bill Tracker • Data from RI General Assembly</span>
           <div className="flex items-center gap-4">
             <a
-              href="https://webserver.rilin.state.ri.us/"
+              href="https://webserver.rilegislature.gov/"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-white transition-colors"
