@@ -497,6 +497,79 @@ function parseStatusPage(html) {
   return actions;
 }
 
+// ──────────────────────────────────────────────────────────────────
+// OpenStates website scraper — no API key needed
+// Scrapes https://openstates.org/ri/bills/2026/H7149/
+// ──────────────────────────────────────────────────────────────────
+
+async function fetchFromOpenStates(identifier, ms = 10000) {
+  const url = `https://openstates.org/ri/bills/${YEAR}/${identifier}/`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  let html = '';
+  try {
+    const r = await fetch(url, {
+      signal: controller.signal,
+      headers: { ...BROWSER_HEADERS, Referer: 'https://openstates.org/' },
+    });
+    clearTimeout(timer);
+    if (!r.ok) return [];
+    html = await r.text();
+  } catch {
+    clearTimeout(timer);
+    return [];
+  }
+
+  if (html.length < 500) return [];
+
+  const $ = cheerio.load(html);
+  const actions = [];
+  const seen = new Set();
+
+  // OpenStates renders a history table — try several selector patterns
+  // Pattern 1: <table> with date in first col
+  $('table tr').each((_, row) => {
+    const cells = $(row).find('td');
+    if (cells.length < 2) return;
+    const dateText = $(cells[0]).text().trim();
+    const descText = $(cells[1]).text().trim();
+    const date = parseDateCell(dateText);
+    if (date && descText.length > 3) {
+      const key = `${date}|${descText}`;
+      if (!seen.has(key)) { seen.add(key); actions.push({ date, description: descText, classification: classifyDescription(descText) }); }
+    }
+  });
+
+  // Pattern 2: data attributes or list items with ISO dates
+  if (actions.length === 0) {
+    $('[data-date], .action-date, .bill-action').each((_, el) => {
+      const dateAttr = $(el).attr('data-date') || $(el).find('.action-date, .date').text().trim();
+      const desc = $(el).find('.action-description, .description, p, span').first().text().trim()
+        || $(el).text().trim();
+      const date = parseDateCell(dateAttr);
+      if (date && desc.length > 3) {
+        const key = `${date}|${desc}`;
+        if (!seen.has(key)) { seen.add(key); actions.push({ date, description: desc, classification: classifyDescription(desc) }); }
+      }
+    });
+  }
+
+  // Pattern 3: full text scan for YYYY-MM-DD or "Month D, YYYY" + description
+  if (actions.length === 0) {
+    const fullText = $('body').text();
+    for (const m of fullText.matchAll(/(\d{4}-\d{2}-\d{2})\s+([A-Za-z][^\n]{4,})/g)) {
+      const date = parseDateCell(m[1]);
+      const desc = m[2].replace(/\s+/g, ' ').trim();
+      if (date && desc.length > 3) {
+        const key = `${date}|${desc}`;
+        if (!seen.has(key)) { seen.add(key); actions.push({ date, description: desc, classification: classifyDescription(desc) }); }
+      }
+    }
+  }
+
+  return actions;
+}
+
 function toISODate(natural) {
   if (!natural) return null;
   const d = new Date(natural);
@@ -558,34 +631,33 @@ export default async function handler(req, res) {
   // ── 2. Parse bill text ───────────────────────────────────────
   const { title, primarySponsor, cosponsors, dateIntroduced, committee } = parseBillText(billText);
 
-  // ── 3. Fetch action history (POST-based WebForms, then GET fallback) ──
+  // ── 3. Fetch action history — try multiple sources in parallel ────
   let actions = [];
   let statusLog = [];
 
-  // Primary: ASP.NET POST approach
-  try {
-    const postResult = await fetchStatusViaPost(identifier);
-    if (postResult) {
-      const { html: postHtml, meta } = postResult;
-      statusLog.push({
-        method: 'POST', url: STATUS_HOME, length: postHtml.length,
-        meta,
-        // Middle-of-response slice: this is where the results table should appear
-        postMidSnippet: meta.postMidSnippet,
-        // Beginning of content if marker found
-        postContentSnippet: meta.pageContentIdx >= 0
-          ? postHtml.slice(meta.pageContentIdx, meta.pageContentIdx + 3000)
-          : postHtml.slice(0, 2000),  // first 2 kB (HTML head/structure)
-      });
-      actions = parseStatusPage(postHtml);
-    } else {
-      statusLog.push({ method: 'POST', url: STATUS_HOME, ok: false });
-    }
-  } catch (err) {
-    statusLog.push({ method: 'POST', error: err.message });
+  // Run RI status POST and OpenStates scrape concurrently; use first that returns actions
+  const [postResult, osActions] = await Promise.all([
+    fetchStatusViaPost(identifier).catch(() => null),
+    fetchFromOpenStates(identifier).catch(() => []),
+  ]);
+
+  // Try RI status POST result first
+  if (postResult) {
+    const { html: postHtml, meta } = postResult;
+    statusLog.push({ method: 'POST', url: STATUS_HOME, length: postHtml.length, meta,
+      postContentSnippet: postHtml.slice(0, 2000) });
+    actions = parseStatusPage(postHtml);
+  } else {
+    statusLog.push({ method: 'POST', url: STATUS_HOME, ok: false });
   }
 
-  // Fallback: GET attempts
+  // Fallback 1: OpenStates website scrape
+  if (actions.length === 0 && osActions.length > 0) {
+    statusLog.push({ method: 'OpenStates', actionsFound: osActions.length });
+    actions = osActions;
+  }
+
+  // Fallback 2: RI status GET attempts
   if (actions.length === 0) {
     for (const statusUrl of getStatusUrls(identifier)) {
       try {
