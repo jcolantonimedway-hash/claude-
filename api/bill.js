@@ -112,14 +112,15 @@ function extractBillText(rawContent, contentType = '') {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Bill text parser — handles the RI plain-text format
+// Bill text parser — handles the RI HTML format
+//
+// Key quirks observed in the wild:
+//  • "AN ACT" is rendered with letter-spacing as "A N    A C T" — don't match it directly
+//  • All header fields are on ONE long line separated by 4–8 spaces (no newlines)
+//  • Fields: "Introduced By: ... [spaces] Date Introduced: ... [spaces] Referred To: ..."
 // ──────────────────────────────────────────────────────────────────
 
 function parseBillText(rawText) {
-  // RI bills sometimes put "Introduced By" and "Date Introduced" on ONE LINE:
-  //   "Introduced By: Rep. Smith and Rep. Jones     Date Introduced: January 16, 2026"
-  // Handle that by splitting on "Date Introduced:" first.
-
   let title = '';
   let primarySponsor = '';
   let cosponsors = [];
@@ -129,44 +130,54 @@ function parseBillText(rawText) {
   const text = rawText.replace(/\r\n?/g, '\n');
 
   // ── Title ──────────────────────────────────────────────────────
-  const titleMatch = text.match(/AN ACT\s+RELATING TO\s+([\s\S]+?)(?=\n\s*\n|\nIntroduced By:|\nSection\s+\d|SECTION\s+\d|It is enacted)/i);
+  // "AN ACT" has letter-spacing artifacts ("A N    A C T"), so match "RELATING TO" instead.
+  // Capture everything from "RELATING TO" up to the 4+ spaces before "Introduced By:".
+  const titleMatch = text.match(/RELATING TO\s+(.*?)(?=\s{4,}Introduced By:|Introduced By:)/is);
   if (titleMatch) {
     title = ('AN ACT RELATING TO ' + titleMatch[1].replace(/\s+/g, ' ')).trim();
-  } else {
-    const anActMatch = text.match(/AN ACT\s+([\s\S]+?)(?=\n\s*\n|\nIntroduced By:|\nSECTION)/i);
-    if (anActMatch) {
-      title = ('AN ACT ' + anActMatch[1].replace(/\s+/g, ' ')).trim();
-    }
   }
 
-  // ── Introduced By + Date (may share a line) ───────────────────
-  const introLineMatch = text.match(/Introduced By:\s*(.*?)(?:\s{3,}|\t)Date Introduced:\s*([^\n]+)/i);
-  if (introLineMatch) {
-    const sponsorText = introLineMatch[1].trim();
-    dateIntroduced = introLineMatch[2].trim();
+  // ── Sponsor: from "Introduced By:" to "Date Introduced:" ──────
+  const sponsorMatch = text.match(/Introduced By:\s*(.*?)(?=\s{3,}Date Introduced:|Date Introduced:)/is);
+  if (sponsorMatch) {
+    const raw = sponsorMatch[1].trim();
+    // Strip leading title word ("Representatives", "Senators", etc.)
+    const sponsorText = raw.replace(/^(Representatives?|Senators?)\s+/i, '');
     const parts = sponsorText.replace(/\s+and\s+/gi, ',').split(',').map(s => s.trim()).filter(Boolean);
     primarySponsor = parts[0] || '';
     cosponsors = parts.slice(1);
-  } else {
-    // Introduced By on its own line
-    const introMatch = text.match(/Introduced By:\s*([^\n]+)/i);
-    if (introMatch) {
-      const sponsorText = introMatch[1].trim();
-      const parts = sponsorText.replace(/\s+and\s+/gi, ',').split(',').map(s => s.trim()).filter(Boolean);
-      primarySponsor = parts[0] || '';
-      cosponsors = parts.slice(1);
-    }
-    const dateMatch = text.match(/Date Introduced:\s*([^\n]+)/i);
-    if (dateMatch) dateIntroduced = dateMatch[1].trim();
   }
 
-  // ── Referred To ───────────────────────────────────────────────
-  const refMatch = text.match(/Referred To:\s*([^\n]+(?:\n(?!\n)[^\n]+)*)/i);
-  if (refMatch) {
-    committee = refMatch[1].replace(/\s+/g, ' ').trim();
+  // ── Date: just the month/day/year — stop before next field ────
+  const dateMatch = text.match(/Date Introduced:\s*([A-Z][a-z]+ \d{1,2},\s*\d{4})/i);
+  if (dateMatch) {
+    dateIntroduced = dateMatch[1].trim();
+  } else {
+    // Fallback: capture to next spaces
+    const dateFallback = text.match(/Date Introduced:\s*(.*?)(?=\s{3,}|$)/i);
+    if (dateFallback) {
+      dateIntroduced = dateFallback[1].trim();
+      const dateMatch2 = text.match(/Date Introduced:\s*([^\n]+)/i);
+      if (dateMatch2) {
+        dateIntroduced = dateMatch2[1].trim().replace(/\s{3,}.+$/i, '').trim();
+      }
+    }
+  }
+
+  // ── Committee: from "Referred To:" to "It is enacted" ─────────
+  const committeeMatch = text.match(/Referred To:\s*(.*?)(?=\s{4,}It is enacted|\s{4,}Be it enacted|It is enacted|Be it enacted)/is);
+  if (committeeMatch) {
+    committee = committeeMatch[1].replace(/\s+/g, ' ').trim();
+  } else {
+    // Fallback: up to next 3+ spaces
+    const committeeFallback = text.match(/Referred To:\s*(.+?)(?=\s{3,}|$)/i);
+    if (committeeFallback) {
+      committee = committeeFallback[1].replace(/\s+/g, ' ').trim();
+    }
   }
 
   return { title, primarySponsor, cosponsors, dateIntroduced, committee };
+
 }
 
 // ──────────────────────────────────────────────────────────────────
