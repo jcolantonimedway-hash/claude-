@@ -79,7 +79,7 @@ function getStatusUrls(id) {
 // The RI status site uses ViewState — we GET the form first, then POST.
 // ──────────────────────────────────────────────────────────────────
 
-const STATUS_BASE = 'http://status.rilegislature.gov/BillDetail.aspx';
+const STATUS_HOME = 'http://status.rilegislature.gov/';
 
 // Regex-based extraction of ALL input/select fields from raw HTML
 // (more reliable than cheerio for byte-position-sensitive parsing)
@@ -127,18 +127,25 @@ function extractFormFields(html) {
 }
 
 async function fetchStatusViaPost(identifier, ms = 12000) {
-  // Step 1: GET the search form page
+  // Step 1: GET the real homepage (BillDetail.aspx was a 404)
   let formHtml = '';
+  let formAction = STATUS_HOME;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ms);
-    const getRes = await fetch(STATUS_BASE, {
+    const getRes = await fetch(STATUS_HOME, {
       signal: controller.signal,
-      headers: { ...BROWSER_HEADERS, Referer: 'http://status.rilegislature.gov/' },
+      headers: { ...BROWSER_HEADERS, Referer: STATUS_HOME },
     });
     clearTimeout(timer);
     if (!getRes.ok) return null;
     formHtml = await getRes.text();
+    // Extract actual form action URL if present
+    const actionMatch = formHtml.match(/<form[^>]+action="([^"]+)"/i);
+    if (actionMatch) {
+      const a = actionMatch[1];
+      formAction = a.startsWith('http') ? a : STATUS_HOME + a.replace(/^\//, '');
+    }
   } catch {
     return null;
   }
@@ -149,7 +156,7 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
   const billInput = textInputs[0];
   const billFieldName = billInput?.name || '';
 
-  // Year field: any select with a year-looking option
+  // Year field
   let yearFieldName = '';
   let yearFieldValue = YEAR;
   for (const sel of selects) {
@@ -166,29 +173,26 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
   const submitName  = submitBtn?.name  || '';
   const submitValue = submitBtn?.value || 'Search';
 
-  // Build POST body — start from all harvested hidden fields
+  // Build POST body
   const body = new URLSearchParams(fields);
   if (billFieldName)   body.set(billFieldName, identifier);
-  else {
-    // Hardcoded fallback names seen on RI status sites
-    body.set('ctl00$ContentPlaceHolder1$txtBillNum', identifier);
-  }
-  if (yearFieldName)   body.set(yearFieldName,   yearFieldValue);
+  else                 body.set('ctl00$ContentPlaceHolder1$txtBillNum', identifier);
+  if (yearFieldName)   body.set(yearFieldName, yearFieldValue);
   else                 body.set('ctl00$ContentPlaceHolder1$ddlYear', YEAR);
   if (submitName)      body.set(submitName, submitValue);
   else                 body.set('ctl00$ContentPlaceHolder1$btnSearch', 'Search');
 
-  // Step 2: POST
+  // Step 2: POST to the form action
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ms);
-    const postRes = await fetch(STATUS_BASE, {
+    const postRes = await fetch(formAction, {
       method: 'POST',
       signal: controller.signal,
       headers: {
         ...BROWSER_HEADERS,
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Referer': STATUS_BASE,
+        'Referer': STATUS_HOME,
         'Origin': 'http://status.rilegislature.gov',
       },
       body: body.toString(),
@@ -198,9 +202,15 @@ async function fetchStatusViaPost(identifier, ms = 12000) {
     const postHtml = await postRes.text();
     return {
       html: postHtml,
-      meta: { billFieldName, yearFieldName, submitName, textInputCount: textInputs.length,
-              selectCount: selects.length, viewStateLen: (fields.__VIEWSTATE || '').length,
-              formHtmlSnippet: formHtml.slice(5000, 8500) }, // body content area
+      meta: {
+        formAction, billFieldName, yearFieldName, submitName,
+        textInputCount: textInputs.length, selectCount: selects.length,
+        viewStateLen: (fields.__VIEWSTATE || '').length,
+        formHtmlBeginContent: formHtml.slice(
+          Math.max(0, formHtml.indexOf('BEGIN PAGE CONTENT')),
+          formHtml.indexOf('BEGIN PAGE CONTENT') + 2000
+        ),
+      },
     };
   } catch {
     return null;
@@ -459,13 +469,13 @@ export default async function handler(req, res) {
     if (postResult) {
       const { html: postHtml, formFieldNames } = postResult;
       statusLog.push({
-        method: 'POST', url: STATUS_BASE, length: postHtml.length,
+        method: 'POST', url: STATUS_HOME, length: postHtml.length,
         meta: postResult.meta,
         postSnippet5k: postHtml.slice(5000, 8500),
       });
       actions = parseStatusPage(postHtml);
     } else {
-      statusLog.push({ method: 'POST', url: STATUS_BASE, ok: false });
+      statusLog.push({ method: 'POST', url: STATUS_HOME, ok: false });
     }
   } catch (err) {
     statusLog.push({ method: 'POST', error: err.message });
