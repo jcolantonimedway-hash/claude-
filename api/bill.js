@@ -206,23 +206,57 @@ function classifyDescription(desc) {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Status page parser
+// Status page parser — multiple strategies for RI's ASP.NET GridView
 // ──────────────────────────────────────────────────────────────────
 
+function parseDateCell(text) {
+  // Accepts: 1/16/2026, 01/16/2026, 1-16-2026, January 16 2026, etc.
+  const t = text.trim();
+  const slash = t.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (slash) {
+    return `${slash[3]}-${slash[1].padStart(2, '0')}-${slash[2].padStart(2, '0')}`;
+  }
+  const natural = new Date(t);
+  if (!isNaN(natural.getTime()) && t.length > 4) {
+    return natural.toISOString().split('T')[0];
+  }
+  return null;
+}
+
 function parseStatusPage(html) {
-  const $ = cheerio.load(html);
+  // ISO-8859-1 page — cheerio handles charset automatically
+  const $ = cheerio.load(html, { decodeEntities: true });
   const actions = [];
+
   $('table tr').each((_, row) => {
     const cells = $(row).find('td');
     if (cells.length < 2) return;
+
+    // Strategy A: first cell is date, second is description
     const col0 = $(cells[0]).text().trim();
     const col1 = $(cells[1]).text().trim();
-    const dateMatch = col0.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (!dateMatch || !col1) return;
-    const date = `${dateMatch[3]}-${dateMatch[1].padStart(2, '0')}-${dateMatch[2].padStart(2, '0')}`;
-    const org = cells.length > 2 ? $(cells[2]).text().trim() : undefined;
-    actions.push({ date, description: col1, classification: classifyDescription(col1), ...(org ? { organization: org } : {}) });
+    let date = parseDateCell(col0);
+    if (date && col1 && col1.length > 2) {
+      const org = cells.length > 2 ? $(cells[2]).text().trim() : undefined;
+      actions.push({ date, description: col1, classification: classifyDescription(col1), ...(org ? { organization: org } : {}) });
+      return;
+    }
+
+    // Strategy B: scan all cells for a date (GridView may have leading checkbox/icon col)
+    for (let i = 0; i < cells.length - 1; i++) {
+      const cellText = $(cells[i]).text().trim();
+      date = parseDateCell(cellText);
+      if (date) {
+        const desc = $(cells[i + 1]).text().trim();
+        if (desc && desc.length > 2) {
+          const org = cells.length > i + 2 ? $(cells[i + 2]).text().trim() : undefined;
+          actions.push({ date, description: desc, classification: classifyDescription(desc), ...(org ? { organization: org } : {}) });
+        }
+        break;
+      }
+    }
   });
+
   return actions;
 }
 
@@ -293,8 +327,11 @@ export default async function handler(req, res) {
   for (const statusUrl of getStatusUrls(identifier)) {
     try {
       const r = await fetchTextWithTimeout(statusUrl);
+      // For debug: grab middle of the HTML where the data table likely lives
+      const mid = r.ok ? Math.floor(r.text.length / 2) : 0;
       statusLog.push({ url: statusUrl, ok: r.ok, length: r.ok ? r.text.length : 0,
-        snippet: r.ok ? r.text.slice(0, 300) : null });
+        snippetStart: r.ok ? r.text.slice(0, 400) : null,
+        snippetMid: r.ok ? r.text.slice(mid, mid + 800) : null });
       if (r.ok && r.text.length > 200) {
         actions = parseStatusPage(r.text);
         if (actions.length > 0) break;
