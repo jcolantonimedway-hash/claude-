@@ -1,0 +1,15 @@
+# Root Netlify config so importing this repo auto-configures the Next.js app
+# that lives in the ri-ai-platform/ subfolder — no manual base-directory needed.
+# (Vercel and other tools ignore this file.)
+
+[build]
+  base = "ri-ai-platform"
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Official Next.js runtime — handles SSR, routing, and image optimization.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
