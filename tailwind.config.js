@@ -4,13 +4,8 @@ export default {
   theme: {
     extend: {
       colors: {
-        'ri-navy': '#002868',
-        'ri-red': '#BF0A30',
-        'ri-gold': '#F5C518',
-      },
-      animation: {
-        'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-        'bounce-slow': 'bounce 2s infinite',
+        ink: '#16161D',
+        paper: '#F7F6F3',
       },
     },
   },

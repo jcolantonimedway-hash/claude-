@@ -1,54 +1,59 @@
-# RI Bill Tracker 🏛️⚓
+# AI Briefing 🛰️
 
-A visual web app that tracks the progress of bills through the **Rhode Island General Assembly**. See at a glance whether a bill is stuck in committee, heading to a floor vote, or on the Governor's desk.
+Your daily 15-minute AI desk: a personal web app that aggregates **frontier lab announcements**, **AI policy & governance**, **tech news**, and the **best AI newsletters** into one briefing — with Claude-powered summaries at three depths.
 
 ## Features
 
-- **Visual progress stepper** — see every stage of a bill's journey from introduction to law
-- **"Held for Further Study" detection** — RI's most common bill fate is highlighted prominently
-- **Action timeline** — full history of every committee hearing, vote, and action
-- **Real RI bill data** via the [OpenStates API](https://openstates.org) (free API key required)
-- **5 demo bills** showing different stages so you can explore immediately
-- Mobile-responsive design using Rhode Island state colors
+- **Today view** — everything from the last 48 hours, grouped by lane (Labs / Policy / Newsletters / News), with unread tracking
+- **Full feed** — search, filter by lane, hide read items
+- **Claude summaries** *(optional, needs an API key)* — per article:
+  - **Takeaway** — the one thing to know, in a sentence or two
+  - **Brief** — what happened + why it matters, two paragraphs
+  - **Deep dive** — background, context, jargon unpacked, what to watch next
+- **Save for later** — bookmarked items persist even after they fall out of the feeds
+- **Editable sources** — add/remove/toggle any RSS or Atom feed in Settings, with per-feed health indicators
 
-## Bill Stages Tracked
+## Works with or without an API key
 
-```
-[Introduced] → [In Committee] → [Floor Vote] → [Passed Chamber] → [Other Chamber] → [Governor] → [Signed into Law]
-```
+The feed, briefing, search, and saving all work with **no key and no cost**. Adding an Anthropic API key (Settings tab has step-by-step instructions) unlocks the summary buttons. Typical personal usage runs a few dollars a month.
 
-Special states:
-- ⏸️ **Held for Further Study** — bill tabled in committee (common in RI, shown in amber)
-- ❌ **Failed in Committee** — committee voted against the bill
-- 🚀 **Reported Out of Committee** — committee advanced the bill
-- 🚫 **Vetoed** — Governor rejected the bill
+Two ways to provide the key:
+1. **In the app** — paste it in Settings (stored in your browser's localStorage only)
+2. **Server-side** — set `ANTHROPIC_API_KEY` as an environment variable in Vercel
 
-## Running Locally
+## Default sources
+
+| Lane | Sources |
+|---|---|
+| Frontier Labs | OpenAI, Anthropic*, Google DeepMind, Meta AI |
+| Policy & Governance | CSET, Brookings, RAND, AI Now Institute |
+| News | The Verge, TechCrunch, Ars Technica, MIT Tech Review |
+| Newsletters | Import AI, Transformer, Don't Worry About the Vase (Zvi), AI Snake Oil |
+
+\* Anthropic has no official RSS feed; the default uses an [openrss.org](https://openrss.org)-generated feed. All URLs are editable in Settings — if a feed shows a red error mark, fix or replace its URL there.
+
+## Running locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173)
+Open [http://localhost:5173](http://localhost:5173). Note: the `/api/*` serverless functions need Vercel's runtime — for full local testing use `npx vercel dev` instead of `npm run dev`.
 
-## Getting Real RI Bill Data
+## Deploying
 
-1. Sign up for a **free** OpenStates API key at [openstates.org/accounts/signup/](https://openstates.org/accounts/signup/)
-2. Click **"Add API Key"** in the app header
-3. Search any RI bill by number (e.g. `H5001`, `S0245`)
+Deploys as-is to [Vercel](https://vercel.com): import the repo, framework preset "Vite". The two serverless functions (`api/feed.js`, `api/summarize.js`) are picked up automatically. Optionally set `ANTHROPIC_API_KEY` in Project Settings → Environment Variables so summaries work without pasting a key in the browser.
 
-The API key is stored in your browser's `localStorage` only.
+## Tech stack
 
-## Tech Stack
+- **React 18** + Vite + Tailwind CSS
+- **Vercel serverless functions** — RSS fetching/parsing (CORS-free, CDN-cached 15 min) and Claude API proxy
+- **Anthropic SDK** (`@anthropic-ai/sdk`) with Claude Opus for summaries
+- All personal state (read/saved/sources/key) in localStorage — no database, no accounts
 
-- **React 18** + Vite
-- **Tailwind CSS** for styling
-- **Lucide React** for icons
-- **OpenStates API v3** for live RI legislative data
-- Rhode Island state colors: Navy `#002868`, Red `#BF0A30`, Gold `#F5C518`
+## Roadmap
 
-## RI Legislature Resources
-
-- [RI General Assembly](https://webserver.rilin.state.ri.us/) — official bill search
-- [OpenStates RI](https://openstates.org/ri/) — aggregated RI bill data
+- **v2 — Chat tutor**: ask questions about anything you're reading
+- **v3 — Learning layer**: concept explainers, flashcards/retention from what you read
+- **v4 — AI policy tracker**: track AI bills, regulations, and lab governance commitments

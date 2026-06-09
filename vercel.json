@@ -1,11 +1,13 @@
 {
   "version": 2,
   "builds": [
-    { "src": "api/bill.js", "use": "@vercel/node" },
+    { "src": "api/feed.js", "use": "@vercel/node" },
+    { "src": "api/summarize.js", "use": "@vercel/node" },
     { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "dist" } }
   ],
   "routes": [
-    { "src": "/api/bill(.*)", "dest": "/api/bill.js" },
+    { "src": "/api/feed(.*)", "dest": "/api/feed.js" },
+    { "src": "/api/summarize(.*)", "dest": "/api/summarize.js" },
     { "handle": "filesystem" },
     { "src": "/(.*)", "dest": "/index.html" }
   ]
